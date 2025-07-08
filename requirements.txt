@@ -21,8 +21,6 @@ numpy==1.26.2
 pandas==2.2.3
 psutil==5.9.7
 pydantic==2.10.6
-PyPDF2>=3.0.0
-python-docx>=0.8.11
 python-dotenv==1.0.1
 pyyaml>=6.0
 pyvis==0.3.2
@@ -37,9 +35,6 @@ sseclient-py==1.7.2
 streamlit==1.42.2
 tqdm==4.66.3
 uvicorn==0.29.0
-
-# linux: sudo apt-get install python-dev-is-python3 libxml2-dev libxslt1-dev antiword unrtf poppler-utils
-textract==1.6.3
 
 # windows
 # pywin32>=302

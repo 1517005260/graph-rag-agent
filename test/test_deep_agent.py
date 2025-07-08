@@ -1,5 +1,8 @@
 import asyncio
 import json
+import pytest
+
+pytest.importorskip("langchain_core")
 from agent.deep_research_agent import DeepResearchAgent
 
 # DeepResearchAgent 综合测试

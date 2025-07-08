@@ -1,4 +1,7 @@
 import asyncio
+import pytest
+
+pytest.importorskip("langchain_core")
 from langchain_core.messages import HumanMessage
 from model.get_models import get_stream_llm_model
 

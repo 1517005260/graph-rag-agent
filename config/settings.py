@@ -82,3 +82,6 @@ GDS_TIMEOUT_SECONDS = 300      # GDS超时时间(秒)
 
 # 索引和社区检测配置
 COMMUNITY_BATCH_SIZE = 50      # 社区处理批次大小
+
+# 是否启用本地图谱构建功能
+USE_BUILDER = False

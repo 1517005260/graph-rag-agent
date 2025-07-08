@@ -4,6 +4,10 @@ import shutil
 import time
 import os
 import sys
+import pytest
+
+pytest.importorskip("faiss")
+pytest.importorskip("sentence_transformers")
 sys.path.append('.')
 
 from CacheManage import CacheManager, ContextAwareCacheKeyStrategy, SimpleCacheKeyStrategy

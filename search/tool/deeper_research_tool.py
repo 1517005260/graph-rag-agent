@@ -10,17 +10,8 @@ from langchain_core.tools import BaseTool
 
 from model.get_models import get_llm_model, get_embeddings_model
 from graph.core import connection_manager
-from config.prompt import (
-    system_template_build_graph,
-    human_template_build_graph
-)
-from config.settings import (
-    entity_types,
-    relationship_types
-)
 from config.reasoning_prompts import RELEVANT_EXTRACTION_PROMPT
 from search.tool.reasoning.prompts import kb_prompt
-from graph.extraction.entity_extractor import EntityRelationExtractor
 from search.tool.deep_research_tool import DeepResearchTool
 from search.tool.hybrid_tool import HybridSearchTool
 from search.tool.reasoning.community_enhance import CommunityAwareSearchEnhancer
@@ -69,7 +60,6 @@ class DeeperResearchTool:
         # 2. 动态知识图谱构建器
         self.knowledge_builder = DynamicKnowledgeGraphBuilder(
             self.graph,
-            EntityRelationExtractor(self.llm, system_template_build_graph, human_template_build_graph, entity_types, relationship_types),
         )
         
         # 3. Chain of Exploration检索器

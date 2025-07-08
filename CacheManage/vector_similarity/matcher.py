@@ -1,4 +1,7 @@
-import faiss
+try:
+    import faiss
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    faiss = None
 import pickle
 import os
 import threading
@@ -30,6 +33,9 @@ class VectorSimilarityMatcher:
         self.max_vectors = max_vectors
         self.index_file = index_file
         
+        if faiss is None:
+            raise ImportError("faiss is required for VectorSimilarityMatcher")
+
         # 初始化FAISS索引
         self.dimension = self.embedding_provider.get_dimension()
         self.index = faiss.IndexFlatIP(self.dimension)

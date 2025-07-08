@@ -21,12 +21,6 @@ from graph.structure import (
     GraphStructureBuilder
 )
 
-# Extraction
-from graph.extraction import (
-    EntityRelationExtractor,
-    GraphWriter
-)
-
 # Similar Entity
 from graph.processing import (
     EntityMerger,
@@ -52,11 +46,7 @@ __all__ = [
     
     # Structure
     'GraphStructureBuilder',
-    
-    # Extraction
-    'EntityRelationExtractor',
-    'GraphWriter',
-    
+
     # Processing
     'EntityMerger',
     'SimilarEntityDetector',

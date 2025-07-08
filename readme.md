@@ -2,6 +2,8 @@
 
 本项目聚焦于结合 **GraphRAG** 与 **私域 Deep Search** 的方式，实现可解释、可推理的智能问答系统，同时结合多 Agent 协作与知识图谱增强，构建完整的 RAG 智能交互解决方案。
 
+> ⚠️ 本仓库自 2025-07 起不再内置知识抽取流水线，推荐使用 AutoSchemaKG 输出的 Neo4j CSV/bolt 作为数据源。
+
 > 💡 灵感来源于检索增强推理与深度搜索场景，探索 RAG 与 Agent 在未来应用中的结合路径。
 
 ## 🏠 项目架构图
@@ -107,6 +109,16 @@ graph-rag-agent/
 ## 🏁 快速开始
 
 请参考：[快速开始文档](./assets/start.md)
+
+### Neo4j 配置
+
+通过以下环境变量指定 Neo4j 连接信息：
+
+```bash
+export NEO4J_URI="bolt://localhost:7687"
+export NEO4J_USERNAME="neo4j"
+export NEO4J_PASSWORD="your_password"
+```
 
 ## 🧰 功能模块
 
