@@ -93,6 +93,16 @@ GDS_CONCURRENCY = 4            # GDS并发度
 GDS_NODE_COUNT_LIMIT = 50000   # GDS节点数量限制
 GDS_TIMEOUT_SECONDS = 300      # GDS超时时间(秒)
 
+# ===== 实体消歧和对齐配置
+DISAMBIG_STRING_THRESHOLD = 0.7  # 字符串匹配阈值
+DISAMBIG_VECTOR_THRESHOLD = 0.85  # 向量相似度阈值
+DISAMBIG_NIL_THRESHOLD = 0.6  # NIL检测阈值
+DISAMBIG_TOP_K = 5  # 候选实体数量
+ 
+ALIGNMENT_CONFLICT_THRESHOLD = 0.5  # 冲突检测阈值
+ALIGNMENT_MIN_GROUP_SIZE = 2  # 最小分组大小
+
+
 # ===== 搜索模块配置 =====
 
 # 本地搜索配置

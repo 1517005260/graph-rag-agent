@@ -47,25 +47,28 @@ class ChunkIndexManager(BaseIndexer):
         connection_manager.create_multiple_indexes(index_queries)
         
     def clear_existing_index(self) -> None:
-        """清除已存在的普通索引（不尝试删除向量索引）"""
+        """清除已存在的普通索引"""
         connection_manager.drop_index("chunk_embedding")
 
-    def create_chunk_index(self, 
+    def create_chunk_index(self,
                          node_label: str = '__Chunk__',
                          text_property: str = 'text',
                          embedding_property: str = 'embedding') -> Optional[Neo4jVector]:
         """
         为文本块节点生成embeddings并创建向量存储接口
-        
+
         Args:
             node_label: 文本块节点的标签
             text_property: 用于计算embedding的文本属性
             embedding_property: 存储embedding的属性名
-            
+
         Returns:
             Neo4jVector: 创建的向量存储对象
         """
         start_time = time.time()
+
+        # 先清除已有索引
+        self.clear_existing_index()
         
         # 获取所有需要处理的文本块节点
         chunks = self.graph.query(

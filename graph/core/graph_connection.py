@@ -71,7 +71,7 @@ class GraphConnectionManager:
     def drop_index(self, index_name: str) -> None:
         """
         删除索引
-        
+
         Args:
             index_name: 索引名称
         """
@@ -80,6 +80,63 @@ class GraphConnectionManager:
             print(f"已删除索引 {index_name}（如果存在）")
         except Exception as e:
             print(f"删除索引 {index_name} 时出错 (可忽略): {e}")
+
+    def drop_all_indexes(self) -> None:
+        """
+        删除所有索引（包括普通索引和向量索引）
+        在开始构建流程前调用，确保清理所有旧索引
+        """
+        print("\n" + "="*60)
+        print("开始清理所有索引...")
+        print("="*60)
+
+        try:
+            # 获取所有索引
+            result = self.graph.query("""
+                SHOW INDEXES
+                YIELD name, type
+                RETURN name, type
+            """)
+
+            if result:
+                print(f"发现 {len(result)} 个索引，开始删除...")
+
+                for index_info in result:
+                    index_name = index_info.get('name')
+                    index_type = index_info.get('type', 'UNKNOWN')
+
+                    if index_name:
+                        try:
+                            self.graph.query(f"DROP INDEX {index_name} IF EXISTS")
+                            print(f"  已删除索引: {index_name} (类型: {index_type})")
+                        except Exception as e:
+                            print(f"  删除索引 {index_name} 失败: {e}")
+
+                print(f"\n索引清理完成，共删除 {len(result)} 个索引")
+            else:
+                print("未发现任何索引")
+
+        except Exception as e:
+            print(f"获取索引列表时出错: {e}")
+            print("尝试删除常见的索引名称...")
+
+            # 备用方案：尝试删除常见的索引
+            common_indexes = [
+                "chunk_embedding",
+                "chunk_vector",
+                "entity_embedding",
+                "entity_vector",
+                "vector"
+            ]
+
+            for index_name in common_indexes:
+                try:
+                    self.graph.query(f"DROP INDEX {index_name} IF EXISTS")
+                    print(f"  已尝试删除: {index_name}")
+                except Exception as e:
+                    print(f"  删除 {index_name} 失败: {e}")
+
+        print("="*60 + "\n")
 
 # 创建全局连接管理器实例
 connection_manager = GraphConnectionManager()

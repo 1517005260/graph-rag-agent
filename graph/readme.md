@@ -23,7 +23,10 @@ graph/
 ├── processing/                # 实体处理组件
 │   ├── __init__.py            # 导出处理组件
 │   ├── entity_merger.py       # 实体合并管理
-│   └── similar_entity.py      # 相似实体检测
+│   ├── similar_entity.py      # 相似实体检测
+│   ├── entity_disambiguation.py # 实体消歧器
+│   ├── entity_alignment.py    # 实体对齐器
+│   └── entity_quality.py      # 实体质量处理器
 └── structure/                 # 图结构构建组件
     ├── __init__.py            # 导出结构组件
     └── struct_builder.py      # 图结构构建器
@@ -56,6 +59,7 @@ graph/
 4. **向量索引建立**：`ChunkIndexManager`和`EntityIndexManager`为节点创建嵌入向量索引
 5. **相似实体检测**：`SimilarEntityDetector`使用向量相似度和GDS算法检测重复实体
 6. **实体合并**：`EntityMerger`基于LLM决策合并相似实体
+7. **实体质量提升**：`EntityQualityProcessor`通过消歧和对齐进一步优化实体质量
 
 ### 3. 性能优化策略
 
@@ -127,9 +131,59 @@ validation_result = validator.validate_graph()
 repair_result = validator.repair_graph()
 ```
 
-## 主要优势
+### 实体质量提升
 
-1. **高可扩展性**：模块化设计使系统易于扩展
-2. **高性能**：批处理和并行处理优化大数据处理能力
-3. **健壮性**：内置错误处理和恢复机制
-4. **灵活性**：适应不同类型的数据源和实体提取需求
+`EntityQualityProcessor`整合实体消歧和对齐，进一步提升实体质量：
+
+```python
+quality_processor = EntityQualityProcessor()
+result = quality_processor.process()
+```
+
+**包含的子模块**：
+
+#### 实体消歧（EntityDisambiguator）
+
+将mention映射到知识图谱中的规范实体：
+
+```python
+disambiguator = EntityDisambiguator()
+
+# 消歧单个mention
+result = disambiguator.disambiguate("实体名称")
+
+# 批量消歧
+results = disambiguator.batch_disambiguate(["实体1", "实体2"])
+
+# 应用到整个图谱
+updated_count = disambiguator.apply_to_graph()
+```
+
+**核心流程**：
+1. **字符串召回**：使用编辑距离快速找到相似实体候选
+2. **向量重排**：利用语义相似度对候选进行重新排序
+3. **NIL检测**：识别未登录实体（知识库中不存在的新实体）
+4. **应用到图谱**：为WCC分组中的实体设置`canonical_id`
+
+#### 实体对齐（EntityAligner）
+
+将具有相同canonical_id的实体对齐合并：
+
+```python
+aligner = EntityAligner()
+
+# 执行完整对齐流程
+result = aligner.align_all(batch_size=100)
+```
+
+**核心流程**：
+1. **按canonical_id分组**：找出所有指向同一canonical实体的实体
+2. **冲突检测**：通过关系类型相似度检测语义冲突
+3. **冲突解决**：使用LLM智能决策保留哪个实体
+4. **实体合并**：将同组实体合并，保留所有关系和属性
+
+**关键特性**：
+- 使用CALL子查询隔离边处理，确保流程健壮性
+- 保留原始关系类型，不丢失语义信息
+- 支持批量处理，避免内存溢出
+- 智能冲突解决，基于Jaccard相似度和LLM判断

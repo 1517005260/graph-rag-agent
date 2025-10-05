@@ -66,6 +66,13 @@ with db_manager as manager:
 - 社区算法选择
 - 回答方式配置
 - 工具描述和示例问题
+- **实体消歧和对齐配置**：
+  - `DISAMBIG_STRING_THRESHOLD`: 字符串匹配阈值（默认0.7）
+  - `DISAMBIG_VECTOR_THRESHOLD`: 向量相似度阈值（默认0.85）
+  - `DISAMBIG_NIL_THRESHOLD`: NIL检测阈值（默认0.6）
+  - `DISAMBIG_TOP_K`: 候选实体数量（默认5）
+  - `ALIGNMENT_CONFLICT_THRESHOLD`: 冲突检测阈值（默认0.5）
+  - `ALIGNMENT_MIN_GROUP_SIZE`: 最小分组大小（默认2）
 
 ## 核心函数
 

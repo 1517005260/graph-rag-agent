@@ -160,6 +160,15 @@ GDS_TIMEOUT_SECONDS = 300      # GDS超时时间(秒)
 
 # 索引和社区检测配置
 COMMUNITY_BATCH_SIZE = 50      # 社区处理批次大小
+
+# 实体消歧和对齐配置
+DISAMBIG_STRING_THRESHOLD = 0.7  # 字符串匹配阈值
+DISAMBIG_VECTOR_THRESHOLD = 0.85  # 向量相似度阈值
+DISAMBIG_NIL_THRESHOLD = 0.6  # NIL检测阈值
+DISAMBIG_TOP_K = 5  # 候选实体数量
+
+ALIGNMENT_CONFLICT_THRESHOLD = 0.5  # 冲突检测阈值
+ALIGNMENT_MIN_GROUP_SIZE = 2  # 最小分组大小
 ```
 
 ## 构建知识图谱

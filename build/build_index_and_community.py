@@ -12,6 +12,7 @@ from config.settings import community_algorithm
 from graph import EntityIndexManager
 from graph import GDSConfig, SimilarEntityDetector
 from graph import EntityMerger
+from graph.processing import EntityQualityProcessor
 from community import CommunityDetectorFactory
 from community import CommunitySummarizerFactory
 from graphdatascience import GraphDataScience
@@ -29,8 +30,9 @@ class IndexCommunityBuilder:
     主要功能包括：
     1. 实体索引的创建和管理
     2. 相似实体的检测和合并
-    3. 社区检测
-    4. 社区摘要生成
+    3. 实体消歧和对齐
+    4. 社区检测
+    5. 社区摘要生成
     """
     
     def __init__(self):
@@ -44,6 +46,7 @@ class IndexCommunityBuilder:
             "索引创建": 0,
             "相似实体检测": 0,
             "实体合并": 0,
+            "实体质量提升": 0,
             "社区检测": 0,
             "社区摘要": 0
         }
@@ -70,7 +73,7 @@ class IndexCommunityBuilder:
         init_start = time.time()
         
         with self._create_progress() as progress:
-            task = progress.add_task("[cyan]初始化组件...", total=3)
+            task = progress.add_task("[cyan]初始化组件...", total=4)
             
             # 初始化图数据库连接
             self.gds = GraphDataScience(
@@ -94,13 +97,16 @@ class IndexCommunityBuilder:
                 batch_size=ENTITY_BATCH_SIZE,
                 max_workers=MAX_WORKERS
             )
+            progress.advance(task)
+            
+            # 初始化实体质量处理器
+            self.quality_processor = EntityQualityProcessor()
+            progress.advance(task)
             
             # 输出使用的参数
             self.console.print(f"[blue]并行处理线程数: {MAX_WORKERS}[/blue]")
             self.console.print(f"[blue]数据库批处理大小: {ENTITY_BATCH_SIZE}[/blue]")
             self.console.print(f"[blue]GDS内存限制: {GDS_MEMORY_LIMIT}GB[/blue]")
-            
-            progress.advance(task)
             
             # 初始化结果存储
             self.processing_results = {
@@ -206,7 +212,24 @@ class IndexCommunityBuilder:
                 }
             )
             
-            # 4. 社区检测
+            # 4. 实体质量提升（消歧和对齐）
+            quality_start = time.time()
+            self.console.print("[cyan]正在进行实体消歧和对齐...[/cyan]")
+            
+            quality_result = self.quality_processor.process()
+            
+            self.performance_stats["实体质量提升"] = time.time() - quality_start
+            
+            self._display_results_table(
+                "实体质量提升结果",
+                {
+                    "消歧的实体": quality_result['disambiguated'],
+                    "对齐的实体": quality_result['aligned'],
+                    "总耗时": f"{self.performance_stats['实体质量提升']:.2f}秒"
+                }
+            )
+            
+            # 5. 社区检测
             community_start = time.time()
             self.console.print("[cyan]正在执行社区检测...[/cyan]")
 
@@ -225,7 +248,7 @@ class IndexCommunityBuilder:
                 community_count = community_results.get('details', {}).get('detection', {}).get('communityCount', 0)
                 self.console.print(f"[blue]检测到 {community_count} 个社区[/blue]")
 
-            # 5. 生成社区摘要
+            # 6. 生成社区摘要
             summary_start = time.time()
             self.console.print("[cyan]正在生成社区摘要...[/cyan]")
 

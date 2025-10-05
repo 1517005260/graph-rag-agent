@@ -31,7 +31,10 @@ from graph.extraction import (
 from graph.processing import (
     EntityMerger,
     SimilarEntityDetector,
-    GDSConfig
+    GDSConfig,
+    EntityDisambiguator,
+    EntityAligner,
+    EntityQualityProcessor
 )
 
 __all__ = [
@@ -60,5 +63,8 @@ __all__ = [
     # Processing
     'EntityMerger',
     'SimilarEntityDetector',
-    'GDSConfig'
+    'GDSConfig',
+    'EntityDisambiguator',
+    'EntityAligner',
+    'EntityQualityProcessor'
 ]
