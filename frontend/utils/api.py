@@ -9,7 +9,7 @@ import streamlit as st
 from typing import Dict, Callable
 from frontend_config.settings import API_URL
 from utils.performance import monitor_performance
-from config.settings import community_algorithm
+from graphrag_agent.config.settings import community_algorithm
 
 @monitor_performance(endpoint="send_message")
 def send_message(message: str) -> Dict:

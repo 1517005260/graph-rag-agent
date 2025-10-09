@@ -1,1 +1,0 @@
-from evaluator.evaluator_config.evaluatorConfig import EvaluatorConfig

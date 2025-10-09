@@ -1,11 +1,11 @@
 import time
 from datetime import datetime
 
-from agent.deep_research_agent import DeepResearchAgent
-from agent.naive_rag_agent import NaiveRagAgent
-from agent.graph_agent import GraphAgent
-from agent.hybrid_agent import HybridAgent
-from agent.fusion_agent import FusionGraphRAGAgent
+from graphrag_agent.agents.deep_research_agent import DeepResearchAgent
+from graphrag_agent.agents.naive_rag_agent import NaiveRagAgent
+from graphrag_agent.agents.graph_agent import GraphAgent
+from graphrag_agent.agents.hybrid_agent import HybridAgent
+from graphrag_agent.agents.fusion_agent import FusionGraphRAGAgent
 
 TEST_CONFIG = {
     "queries": [

@@ -1,4 +1,4 @@
-from config.neo4jdb import get_db_manager as original_get_db_manager
+from graphrag_agent.config.neo4jdb import get_db_manager as original_get_db_manager
 
 class DatabaseManager:
     """Neo4j 数据库管理类"""
