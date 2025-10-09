@@ -3,7 +3,7 @@
 ## 目录结构
 
 ```
-build/
+graphrag_agent/integrations/build/
 ├── __init__.py                           # 模块入口，导出类和函数
 ├── build_chunk_index.py                  # 文本块索引构建器
 ├── build_graph.py                        # 基础知识图谱构建器
@@ -20,7 +20,7 @@ build/
 
 ## 模块概述
 
-`build` 模块是知识图谱系统的高层构建工具，封装了 `graph` 和 `community` 等底层模块，提供完整的图谱构建、索引创建和增量更新流程。本模块采用了模块化设计，将图谱构建过程分解为多个独立且可组合的步骤，既支持完整的一站式构建，也支持单独执行特定步骤。
+`graphrag_agent/integrations/build` 模块是知识图谱系统的高层构建工具，封装了 `graphrag_agent/graph` 和 `graphrag_agent/community` 等底层模块，提供完整的图谱构建、索引创建和增量更新流程。本模块采用了模块化设计，将图谱构建过程分解为多个独立且可组合的步骤，既支持完整的一站式构建，也支持单独执行特定步骤。
 
 ## 核心实现思路
 
@@ -184,7 +184,7 @@ manager.start_scheduler()
 ### 完整构建流程
 
 ```python
-from build.main import KnowledgeGraphProcessor
+from graphrag_agent.integrations.build.main import KnowledgeGraphProcessor
 
 # 执行完整构建流程
 processor = KnowledgeGraphProcessor()
@@ -194,7 +194,7 @@ processor.process_all()
 ### 增量更新
 
 ```python
-from build.incremental_update import IncrementalUpdateManager
+from graphrag_agent.integrations.build.incremental_update import IncrementalUpdateManager
 
 # 单次更新
 manager = IncrementalUpdateManager("./data")
@@ -208,13 +208,13 @@ manager.start_scheduler()
 
 ```bash
 # 执行完整构建
-python -m build.main
+python graphrag_agent/integrations/build/main.py
 
 # 运行增量更新（单次）
-python -m build.incremental_update --once
+python graphrag_agent/integrations/build/incremental_update.py --once
 
 # 运行增量更新（守护进程模式）
-python -m build.incremental_update --daemon --interval 300
+python graphrag_agent/integrations/build/incremental_update.py --daemon --interval 300
 ```
 
 ## 性能和扩展性考量

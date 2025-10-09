@@ -2,13 +2,12 @@
 
 ## 项目结构
 ```
-.
-├── config/               # 配置文件目录
-│   ├── __init__.py       # 包初始化文件
-│   ├── neo4jdb.py        # Neo4j数据库连接管理
-│   ├── prompt.py         # 各类提示模板定义
-│   ├── reasoning_prompts.py # 推理提示模板
-│   └── settings.py       # 全局配置参数
+graphrag_agent/config/    # 配置文件目录
+├── __init__.py           # 包初始化文件
+├── neo4jdb.py            # Neo4j数据库连接管理
+├── prompt.py             # 各类提示模板定义
+├── reasoning_prompts.py  # 推理提示模板
+└── settings.py           # 全局配置参数
 ```
 
 ## 模块简介

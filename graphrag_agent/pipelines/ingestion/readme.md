@@ -2,14 +2,15 @@
 
 ## 项目结构
 ```
-.
-├── config/             # 配置文件目录
-│   └── settings.py     # 全局配置参数
-├── processor/          # 文档处理模块
-│   ├── __init__.py     # 包初始化文件
-│   ├── document_processor.py  # 文档处理器核心类 
-│   ├── file_reader.py  # 多格式文件读取器
-│   └── text_chunker.py # 中文文本分块器
+graphrag_agent/
+├── config/                     # 配置文件目录
+│   └── settings.py             # 全局配置参数
+└── pipelines/
+    └── ingestion/              # 文档摄取处理模块
+        ├── __init__.py         # 包初始化文件
+        ├── document_processor.py  # 文档处理器核心类
+        ├── file_reader.py      # 多格式文件读取器
+        └── text_chunker.py     # 中文文本分块器
 ```
 
 ## 模块简介

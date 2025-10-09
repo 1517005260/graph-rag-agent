@@ -165,6 +165,6 @@ class BaseEvaluator(ABC):
             message: 日志消息
             *args, **kwargs: 额外参数
         """
-        from evaluator import debug_print
+        from graphrag_agent.evaluation import debug_print
         if self.debug:
             debug_print(f"[{self.__class__.__name__}] {message}", *args, **kwargs)

@@ -115,7 +115,7 @@ def main():
         try:
             if agent_type == "deep" and args.use_deeper:
                 # 特殊处理深度研究Agent，使用增强版
-                from agent.deep_research_agent import DeepResearchAgent
+                from graphrag_agent.agents.deep_research_agent import DeepResearchAgent
                 agents[agent_type] = DeepResearchAgent(use_deeper_tool=True)
                 logger.info(f"成功加载{agent_type}Agent(增强版)")
             else:

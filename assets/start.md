@@ -115,7 +115,7 @@ pip install -e .
 - YAML/YML（配置文件）
 ```
 
-## 知识图谱配置（`config/settings.py`）
+## 知识图谱配置（`graphrag_agent/config/settings.py`）
 
 ```python
 # 基础设置
@@ -177,13 +177,13 @@ ALIGNMENT_MIN_GROUP_SIZE = 2  # 最小分组大小
 cd graph-rag-agent/
 
 # 初始全量构建
-python build/main.py
+python graphrag_agent/integrations/build/main.py
 
 # 单次变量（增量、减量）构建：
-python build/incremental_update.py --once
+python graphrag_agent/integrations/build/incremental_update.py --once
 
 # 后台守护进程，定期变量更新：
-python build/incremental_update.py --daemon
+python graphrag_agent/integrations/build/incremental_update.py --daemon
 ```
 
 **注意：** `main.py`是构建的全流程，如果需要单独跑某个流程，请先完成实体索引的构建，再进行 chunk 索引构建，否则会报错（chunk 索引依赖实体索引）。
@@ -205,13 +205,13 @@ python search_with_stream.py
 ## 知识图谱评估
 
 ```bash
-cd evaluator/test
+cd graphrag_agent/evaluation/test
 # 查看对应 README 获取更多信息
 ```
 
 ## 示例问题配置（用于前端展示）
 
-编辑 `config/settings.py` 中的 `examples` 字段：
+编辑 `graphrag_agent/config/settings.py` 中的 `examples` 字段：
 
 ```python
 examples = [

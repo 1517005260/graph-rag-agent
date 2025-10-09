@@ -45,7 +45,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
 
         # 导入并复用现有的embedding模型
         try:
-            from model.get_models import get_embeddings_model
+            from graphrag_agent.models.get_models import get_embeddings_model
             self.model = get_embeddings_model()
             self._dimension = None
             self._initialized = True

@@ -123,7 +123,7 @@ class DualPathSearcher:
                 result = response.content if hasattr(response, "content") else str(response)
             else:
                 # 如果没有llm属性，尝试从外部获取
-                from model.get_models import get_llm_model
+                from graphrag_agent.models.get_models import get_llm_model
                 llm = get_llm_model()
                 response = llm.invoke(prompt)
                 result = response.content if hasattr(response, "content") else str(response)

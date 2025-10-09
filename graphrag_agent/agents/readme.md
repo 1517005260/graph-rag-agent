@@ -5,7 +5,7 @@
 ## 目录结构
 
 ```
-agent/
+graphrag_agent/agents/
 ├── __init__.py                # 模块初始化文件
 ├── base.py                    # Agent 基类，提供通用功能和接口
 ├── graph_agent.py             # 基于图结构的 Agent 实现

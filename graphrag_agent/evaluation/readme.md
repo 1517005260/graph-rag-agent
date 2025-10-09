@@ -5,7 +5,7 @@
 ## 目录结构
 
 ```
-evaluator/
+graphrag_agent/evaluation/
 ├── __init__.py                  # 模块初始化文件，包含调试模式设置
 ├── core/                        # 核心组件
 │   ├── __init__.py              # 核心组件初始化文件

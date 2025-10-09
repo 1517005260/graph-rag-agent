@@ -3,7 +3,7 @@
 ## 目录结构
 
 ```
-graph/
+graphrag_agent/graph/
 ├── __init__.py                # 模块入口，导出主要类和函数
 ├── core/                      # 核心功能组件
 │   ├── __init__.py            # 导出核心组件

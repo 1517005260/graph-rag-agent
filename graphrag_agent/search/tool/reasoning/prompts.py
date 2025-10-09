@@ -13,7 +13,7 @@ def num_tokens_from_string(text: str) -> int:
         int: 估计的token数
     """
     try:
-        from model.get_models import count_tokens
+        from graphrag_agent.models.get_models import count_tokens
         return count_tokens(text)
     except:
         # 简单备用

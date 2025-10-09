@@ -3,7 +3,7 @@
 ## 目录结构
 
 ```
-model/
+graphrag_agent/models/
 ├── __init__.py          # 模块初始化文件
 ├── get_models.py        # 模型获取和初始化功能
 └── test_stream_model.py # 流式模型测试
@@ -33,7 +33,7 @@ Model 模块负责初始化和管理各种语言模型，主要基于 LangChain 
 
 ```python
 # 标准模型使用示例
-from model.get_models import get_llm_model
+from graphrag_agent.models.get_models import get_llm_model
 
 llm = get_llm_model()
 response = llm.invoke("你好")
@@ -41,7 +41,7 @@ print(response)
 
 # 流式模型使用示例(注：由于langchain bug，这里需要改源码才能使用，本项目采用模拟流式输出)
 import asyncio
-from model.get_models import get_stream_llm_model
+from graphrag_agent.models.get_models import get_stream_llm_model
 from langchain_core.messages import HumanMessage
 
 async def main():

@@ -33,7 +33,7 @@ CacheManage/
 ### 基本使用
 
 ```python
-from CacheManage import CacheManager
+from graphrag_agent.cache_manager import CacheManager
 
 # 创建缓存管理器 (使用默认配置)
 cache = CacheManager()
@@ -98,8 +98,8 @@ cache.flush() -> None
 ### 创建缓存管理器
 
 ```python
-from CacheManage import (
-    CacheManager, 
+from graphrag_agent.cache_manager import (
+    CacheManager,
     ContextAwareCacheKeyStrategy,
     MemoryCacheBackend,
     HybridCacheBackend
@@ -109,16 +109,16 @@ from CacheManage import (
 cache = CacheManager(
     # 缓存键策略
     key_strategy=ContextAwareCacheKeyStrategy(context_window=3),
-    
+
     # 存储配置
     cache_dir="./my_cache",           # 缓存目录
     memory_only=False,                # 是否仅使用内存
     max_memory_size=200,              # 内存缓存最大项目数
     max_disk_size=5000,               # 磁盘缓存最大项目数
-    
+
     # 安全性
     thread_safe=True,                 # 是否线程安全
-    
+
     # 向量相似性
     enable_vector_similarity=True,    # 启用向量匹配
     similarity_threshold=0.8,         # 相似度阈值
@@ -133,7 +133,7 @@ cache = CacheManager(
 适用于无上下文关联的查询缓存。
 
 ```python
-from CacheManage import CacheManager, SimpleCacheKeyStrategy
+from graphrag_agent.cache_manager import CacheManager, SimpleCacheKeyStrategy
 
 cache = CacheManager(key_strategy=SimpleCacheKeyStrategy())
 ```
@@ -143,7 +143,7 @@ cache = CacheManager(key_strategy=SimpleCacheKeyStrategy())
 考虑会话历史，适用于对话系统。
 
 ```python
-from CacheManage import CacheManager, ContextAwareCacheKeyStrategy
+from graphrag_agent.cache_manager import CacheManager, ContextAwareCacheKeyStrategy
 
 cache = CacheManager(
     key_strategy=ContextAwareCacheKeyStrategy(context_window=3)
@@ -159,7 +159,7 @@ result = cache.get("继续", thread_id="user_123")
 同时考虑上下文和关键词，提供更精确的缓存匹配。
 
 ```python
-from CacheManage import CacheManager, ContextAndKeywordAwareCacheKeyStrategy
+from graphrag_agent.cache_manager import CacheManager, ContextAndKeywordAwareCacheKeyStrategy
 
 cache = CacheManager(
     key_strategy=ContextAndKeywordAwareCacheKeyStrategy()
@@ -167,8 +167,8 @@ cache = CacheManager(
 
 # 使用关键词增强缓存键
 cache.set(
-    "分析数据", 
-    "数据分析结果...", 
+    "分析数据",
+    "数据分析结果...",
     thread_id="user_123",
     low_level_keywords=["pandas", "numpy"],
     high_level_keywords=["数据科学", "机器学习"]
@@ -180,7 +180,7 @@ cache.set(
 忽略上下文，全局共享缓存。
 
 ```python
-from CacheManage import CacheManager, GlobalCacheKeyStrategy
+from graphrag_agent.cache_manager import CacheManager, GlobalCacheKeyStrategy
 
 cache = CacheManager(key_strategy=GlobalCacheKeyStrategy())
 ```
@@ -207,7 +207,7 @@ cache = CacheManager(
 ### 3. 自定义后端
 
 ```python
-from CacheManage import CacheManager, DiskCacheBackend
+from graphrag_agent.cache_manager import CacheManager, DiskCacheBackend
 
 # 使用纯磁盘缓存
 disk_backend = DiskCacheBackend(
@@ -296,7 +296,7 @@ print(f"缓存未命中: {metrics['misses']}")
 
 ```python
 import threading
-from CacheManage import CacheManager
+from graphrag_agent.cache_manager import CacheManager
 
 # 创建线程安全的缓存管理器
 cache = CacheManager(thread_safe=True)
@@ -319,10 +319,10 @@ for t in threads:
 
 ## 配置文件
 
-系统依赖 `config/settings.py` 中的配置：
+系统依赖 `graphrag_agent/config/settings.py` 中的配置：
 
 ```python
-# config/settings.py
+# graphrag_agent/config/settings.py
 similarity_threshold = 0.8  # 默认相似度阈值
 ```
 

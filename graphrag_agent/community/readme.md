@@ -3,7 +3,7 @@
 ## 文件结构
 
 ```
-community/
+graphrag_agent/community/
 ├── __init__.py                    # 模块入口，导出工厂类
 ├── readme.md                      # 模块说明文档
 ├── detector/                      # 社区检测器目录
@@ -121,7 +121,7 @@ community/
 ```python
 from langchain_community.graphs import Neo4jGraph
 from graphdatascience import GraphDataScience
-from community import CommunityDetectorFactory
+from graphrag_agent.community import CommunityDetectorFactory
 
 # 初始化图连接
 graph = Neo4jGraph(url="neo4j://localhost:7687", username="neo4j", password="password")
@@ -138,7 +138,7 @@ print(f"社区检测结果: {results}")
 ### 社区摘要生成
 
 ```python
-from community import CommunitySummarizerFactory
+from graphrag_agent.community import CommunitySummarizerFactory
 
 # 创建对应的摘要生成器
 summarizer = CommunitySummarizerFactory.create_summarizer('leiden', graph)

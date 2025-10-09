@@ -78,7 +78,7 @@ class CompositeGraphRAGEvaluator:
         
         # 如果支持subgraph_quality指标，添加它
         try:
-            from evaluator.metrics.graph_metrics import SubgraphQualityMetric
+            from graphrag_agent.evaluation.metrics.graph_metrics import SubgraphQualityMetric
             default_retrieval_metrics.append('subgraph_quality')
         except ImportError:
             pass
@@ -118,7 +118,7 @@ class CompositeGraphRAGEvaluator:
             message: 日志消息
             *args, **kwargs: 额外参数
         """
-        from evaluator import debug_print
+        from graphrag_agent.evaluation import debug_print
         if self.debug:
             debug_print(f"[CompositeEvaluator] {message}", *args, **kwargs)
             

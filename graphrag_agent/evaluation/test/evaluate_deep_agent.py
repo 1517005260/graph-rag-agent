@@ -66,7 +66,7 @@ def main():
     
     try:
         # 设置是否使用增强版
-        from agent.deep_research_agent import DeepResearchAgent
+        from graphrag_agent.agents.deep_research_agent import DeepResearchAgent
         agent = DeepResearchAgent()
         
         if not args.use_deeper:

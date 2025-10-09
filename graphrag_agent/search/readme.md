@@ -5,7 +5,7 @@
 ## 目录结构
 
 ```
-search/
+graphrag_agent/search/
 ├── __init__.py                  # 模块初始化文件，导出主要类和工具类
 ├── local_search.py              # 本地搜索实现，基于向量检索的社区内精确查询
 ├── global_search.py             # 全局搜索实现，基于Map-Reduce模式的跨社区查询
