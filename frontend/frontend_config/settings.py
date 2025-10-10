@@ -1,4 +1,4 @@
-from config.settings import examples as eg
+from graphrag_agent.config.settings import examples as eg
 
 # API服务器地址
 API_URL = "http://localhost:8000"

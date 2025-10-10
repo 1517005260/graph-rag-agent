@@ -6,7 +6,7 @@ import os
 import sys
 sys.path.append('.')
 
-from CacheManage import CacheManager, ContextAwareCacheKeyStrategy, SimpleCacheKeyStrategy
+from graphrag_agent.cache_manager import CacheManager, ContextAwareCacheKeyStrategy, SimpleCacheKeyStrategy
 
 
 class TestCacheSystem(unittest.TestCase):

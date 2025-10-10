@@ -1,6 +1,6 @@
 import asyncio
 import json
-from agent.deep_research_agent import DeepResearchAgent
+from graphrag_agent.agents.deep_research_agent import DeepResearchAgent
 
 # DeepResearchAgent 综合测试
 async def test_deep_research_agent_advanced():

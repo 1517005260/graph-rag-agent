@@ -10,11 +10,11 @@ class AgentManager:
     def __init__(self):
         """初始化Agent管理器"""
         # 导入各种Agent
-        from agent.graph_agent import GraphAgent
-        from agent.hybrid_agent import HybridAgent
-        from agent.naive_rag_agent import NaiveRagAgent
-        from agent.deep_research_agent import DeepResearchAgent 
-        from agent.fusion_agent import FusionGraphRAGAgent 
+        from graphrag_agent.agents.graph_agent import GraphAgent
+        from graphrag_agent.agents.hybrid_agent import HybridAgent
+        from graphrag_agent.agents.naive_rag_agent import NaiveRagAgent
+        from graphrag_agent.agents.deep_research_agent import DeepResearchAgent
+        from graphrag_agent.agents.fusion_agent import FusionGraphRAGAgent 
         
         # 初始化Agent类
         self.agent_classes = {

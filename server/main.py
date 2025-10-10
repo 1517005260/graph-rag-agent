@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from routers import api_router
 from server_config.database import get_db_manager
 from services.agent_service import agent_manager
-from config.settings import workers
+from graphrag_agent.config.settings import workers
 
 # 初始化 FastAPI 应用
 app = FastAPI(title="知识图谱问答系统", description="基于知识图谱的智能问答系统后端API")

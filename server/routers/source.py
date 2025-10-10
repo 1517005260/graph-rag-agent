@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 from models.schemas import SourceRequest, SourceResponse, SourceInfoResponse, SourceInfoBatchRequest, ContentBatchRequest
 from services.kg_service import get_source_content, get_source_file_info
 from utils.neo4j_batch import BatchProcessor
-from config.neo4jdb import get_db_manager
+from graphrag_agent.config.neo4jdb import get_db_manager
 
 # 创建路由器
 router = APIRouter()
