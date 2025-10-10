@@ -43,7 +43,7 @@ Test 模块提供了对多种智能代理 (Agent) 的测试接口，支持流式
 
 ```python
 # 非流式测试示例
-from agent.deep_research_agent import DeepResearchAgent
+from graphrag_agent.agents.deep_research_agent import DeepResearchAgent
 
 agent = DeepResearchAgent()
 result = agent.ask("优秀学生要如何申请")

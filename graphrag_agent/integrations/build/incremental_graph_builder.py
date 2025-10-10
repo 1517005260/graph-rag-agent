@@ -10,7 +10,10 @@ from rich.table import Table
 
 from graphrag_agent.models.get_models import get_llm_model
 from graphrag_agent.config.prompt import system_template_build_graph, human_template_build_graph
-from graphrag_agent.config.settings import entity_types, relationship_types, CHUNK_SIZE, OVERLAP, MAX_WORKERS, BATCH_SIZE
+from graphrag_agent.config.settings import (
+    entity_types, relationship_types, CHUNK_SIZE, OVERLAP, MAX_WORKERS, BATCH_SIZE,
+    FILE_REGISTRY_PATH
+)
 from graphrag_agent.pipelines.ingestion.document_processor import DocumentProcessor
 from graphrag_agent.graph import EntityRelationExtractor, GraphWriter, GraphStructureBuilder
 from graphrag_agent.config.neo4jdb import get_db_manager
@@ -28,14 +31,17 @@ class IncrementalGraphUpdater:
     4. 保护现有图谱的完整性
     """
     
-    def __init__(self, files_dir: str, registry_path: str = "./file_registry.json"):
+    def __init__(self, files_dir: str, registry_path: str = None):
         """
         初始化增量图谱更新器
-        
+
         Args:
             files_dir: 文件目录
-            registry_path: 文件注册表路径
+            registry_path: 文件注册表路径，默认使用配置中的路径
         """
+        if registry_path is None:
+            registry_path = str(FILE_REGISTRY_PATH)
+
         self.console = Console()
         self.graph = get_db_manager().graph
         

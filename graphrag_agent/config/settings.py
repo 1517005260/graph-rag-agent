@@ -3,8 +3,10 @@ from pathlib import Path
 # ===== 基础配置 =====
 
 # 基础路径设置
-BASE_DIR = Path(__file__).resolve().parent.parent
-FILES_DIR = BASE_DIR / 'files'
+BASE_DIR = Path(__file__).resolve().parent.parent  # graphrag_agent包目录
+PROJECT_ROOT = BASE_DIR.parent  # 项目根目录
+FILES_DIR = PROJECT_ROOT / 'files'
+FILE_REGISTRY_PATH = PROJECT_ROOT / 'file_registry.json'  # 文件注册表路径
 
 # 知识库主题设置，用于deepsearch（reasoning提示词）
 KB_NAME = "华东理工大学"
