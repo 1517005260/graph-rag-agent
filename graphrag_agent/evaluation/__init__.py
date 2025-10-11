@@ -8,9 +8,15 @@ def debug_print(*args, **kwargs):
 
 def set_debug_mode(enabled=True):
     """设置全局调试模式
-    
+
     Args:
         enabled (bool): 是否启用调试模式
     """
     global DEBUG_MODE
     DEBUG_MODE = enabled
+
+__all__ = [
+    'DEBUG_MODE',
+    'debug_print',
+    'set_debug_mode'
+]

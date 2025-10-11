@@ -91,11 +91,11 @@ def get_metric_class(metric_name: str):
 def get_metric_instance(metric_name: str, config):
     """
     获取指标实例
-    
+
     Args:
         metric_name: 指标名称
         config: 配置对象
-        
+
     Returns:
         指标实例
     """
@@ -103,3 +103,42 @@ def get_metric_instance(metric_name: str, config):
     if metric_cls:
         return metric_cls(config)
     return None
+
+__all__ = [
+    # 答案评估指标
+    'ExactMatch',
+    'F1Score',
+
+    # 检索评估指标
+    'RetrievalPrecision',
+    'RetrievalUtilization',
+    'RetrievalLatency',
+    'ChunkUtilization',
+
+    # 图评估指标
+    'EntityCoverageMetric',
+    'GraphCoverageMetric',
+    'RelationshipUtilizationMetric',
+    'CommunityRelevanceMetric',
+    'SubgraphQualityMetric',
+
+    # LLM评估指标
+    'ResponseCoherence',
+    'FactualConsistency',
+    'ComprehensiveAnswerMetric',
+    'LLMGraphRagEvaluator',
+
+    # 深度研究指标
+    'ReasoningCoherence',
+    'ReasoningDepth',
+    'IterativeImprovementMetric',
+    'KnowledgeGraphUtilizationMetric',
+
+    # 工具函数
+    'list_available_metrics',
+    'get_metric_class',
+    'get_metric_instance',
+
+    # 指标字典
+    '__all_metrics__'
+]
