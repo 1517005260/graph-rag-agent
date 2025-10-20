@@ -11,3 +11,4 @@ evaluation_results/
 evaluation_results_with_golden/
 evaluation_results_no_golden/
 file_registry.json
+documents/
