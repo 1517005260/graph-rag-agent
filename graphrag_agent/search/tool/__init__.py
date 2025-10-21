@@ -8,6 +8,9 @@ from graphrag_agent.search.tool.hybrid_tool import HybridSearchTool
 from graphrag_agent.search.tool.naive_search_tool import NaiveSearchTool
 from graphrag_agent.search.tool.deep_research_tool import DeepResearchTool
 from graphrag_agent.search.tool.deeper_research_tool import DeeperResearchTool
+from graphrag_agent.search.tool.chain_exploration_tool import ChainOfExplorationTool
+from graphrag_agent.search.tool.hypothesis_tool import HypothesisGeneratorTool
+from graphrag_agent.search.tool.validation_tool import AnswerValidationTool
 
 __all__ = [
     "BaseSearchTool",
@@ -17,4 +20,7 @@ __all__ = [
     "NaiveSearchTool",
     "DeepResearchTool",
     "DeeperResearchTool",
+    "ChainOfExplorationTool",
+    "HypothesisGeneratorTool",
+    "AnswerValidationTool",
 ]
