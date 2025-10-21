@@ -15,7 +15,8 @@ from graphrag_agent.agents.multi_agent.core.plan_spec import (
     ProblemStatement,
     TaskNode,
     TaskGraph,
-    AcceptanceCriteria
+    AcceptanceCriteria,
+    PlanExecutionSignal
 )
 from graphrag_agent.agents.multi_agent.core.execution_record import (
     ExecutionRecord,
@@ -26,6 +27,30 @@ from graphrag_agent.agents.multi_agent.core.execution_record import (
 from graphrag_agent.agents.multi_agent.core.retrieval_result import (
     RetrievalResult,
     RetrievalMetadata
+)
+from graphrag_agent.agents.multi_agent.executor import (
+    BaseExecutor,
+    ExecutorConfig,
+    TaskExecutionResult,
+    RetrievalExecutor,
+    ResearchExecutor,
+    ReflectionExecutor,
+    WorkerCoordinator,
+)
+from graphrag_agent.agents.multi_agent.reporter import (
+    BaseReporter,
+    ReporterConfig,
+    ReportResult,
+    SectionContent,
+    OutlineBuilder,
+    ReportOutline,
+    SectionOutline,
+    SectionWriter,
+    SectionWriterConfig,
+    SectionDraft,
+    ConsistencyChecker,
+    ConsistencyCheckResult,
+    CitationFormatter,
 )
 
 __all__ = [
@@ -40,6 +65,7 @@ __all__ = [
     "TaskNode",
     "TaskGraph",
     "AcceptanceCriteria",
+    "PlanExecutionSignal",
     # Execution models
     "ExecutionRecord",
     "ToolCall",
@@ -48,4 +74,26 @@ __all__ = [
     # Retrieval models
     "RetrievalResult",
     "RetrievalMetadata",
+    # Executors
+    "BaseExecutor",
+    "ExecutorConfig",
+    "TaskExecutionResult",
+    "RetrievalExecutor",
+    "ResearchExecutor",
+    "ReflectionExecutor",
+    "WorkerCoordinator",
+    # Reporter models
+    "BaseReporter",
+    "ReporterConfig",
+    "ReportResult",
+    "SectionContent",
+    "OutlineBuilder",
+    "ReportOutline",
+    "SectionOutline",
+    "SectionWriter",
+    "SectionWriterConfig",
+    "SectionDraft",
+    "ConsistencyChecker",
+    "ConsistencyCheckResult",
+    "CitationFormatter",
 ]

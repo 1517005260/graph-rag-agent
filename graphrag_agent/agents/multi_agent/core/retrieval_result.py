@@ -4,11 +4,37 @@
 定义RetrievalResult统一接口，对齐IoD风格的多粒度检索
 """
 
-from typing import Union, Dict, Any, Optional, Literal
+from typing import Union, Dict, Any, Optional, Literal, Tuple
 from datetime import datetime
 import uuid
 
 from pydantic import BaseModel, Field
+
+RETRIEVAL_SOURCE_CHOICES: Tuple[str, ...] = (
+    "local_search",
+    "global_search",
+    "hybrid_search",
+    "naive_search",
+    "deep_research",
+    "deeper_research",
+    "chain_exploration",
+    "graph_search",
+    "hybrid",
+    "custom",
+)
+
+RetrievalSourceLiteral = Literal[
+    "local_search",
+    "global_search",
+    "hybrid_search",
+    "naive_search",
+    "deep_research",
+    "deeper_research",
+    "chain_exploration",
+    "graph_search",
+    "hybrid",
+    "custom",
+]
 
 
 class RetrievalMetadata(BaseModel):
@@ -100,14 +126,7 @@ class RetrievalResult(BaseModel):
     metadata: RetrievalMetadata = Field(description="检索结果的元数据")
 
     # 检索来源
-    source: Literal[
-        "local_search",
-        "global_search",
-        "graph_search",
-        "deep_research",
-        "chain_exploration",
-        "hybrid"
-    ] = Field(description="检索来源工具")
+    source: RetrievalSourceLiteral = Field(description="检索来源工具")
 
     # 相似度/相关性分数 (0.0-1.0)
     score: float = Field(

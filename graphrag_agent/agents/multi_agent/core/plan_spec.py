@@ -4,11 +4,36 @@
 定义PlanSpec及相关数据模型，规范化任务计划
 """
 
-from typing import List, Dict, Any, Optional, Literal
+from typing import List, Dict, Any, Optional, Literal, Tuple
 from datetime import datetime
 import uuid
 
 from pydantic import BaseModel, Field, field_validator
+from collections import deque, defaultdict
+
+TASK_TYPE_CHOICES: Tuple[str, ...] = (
+    "local_search",
+    "global_search",
+    "hybrid_search",
+    "naive_search",
+    "deep_research",
+    "deeper_research",
+    "chain_exploration",
+    "reflection",
+    "custom",
+)
+
+TaskTypeLiteral = Literal[
+    "local_search",
+    "global_search",
+    "hybrid_search",
+    "naive_search",
+    "deep_research",
+    "deeper_research",
+    "chain_exploration",
+    "reflection",
+    "custom",
+]
 
 
 class ProblemStatement(BaseModel):
@@ -52,13 +77,7 @@ class TaskNode(BaseModel):
     )
 
     # 任务类型
-    task_type: Literal[
-        "local_search",
-        "global_search",
-        "deep_research",
-        "chain_exploration",
-        "custom"
-    ] = Field(description="任务类型")
+    task_type: TaskTypeLiteral = Field(description="任务类型")
 
     # 任务描述
     description: str = Field(description="任务的详细描述")
@@ -205,6 +224,43 @@ class TaskGraph(BaseModel):
             execution_mode=data.get("execution_mode", "sequential")
         )
 
+    def topological_sort(self) -> List[TaskNode]:
+        """
+        获取任务的拓扑排序
+
+        返回:
+            List[TaskNode]: 按依赖顺序排列的任务节点列表
+        """
+        task_map = {node.task_id: node for node in self.nodes}
+        in_degree: Dict[str, int] = {node.task_id: 0 for node in self.nodes}
+        adjacency: Dict[str, List[str]] = defaultdict(list)
+
+        for node in self.nodes:
+            for dep_id in node.depends_on:
+                adjacency[dep_id].append(node.task_id)
+                in_degree[node.task_id] += 1
+
+        queue = deque(sorted(
+            (task_map[task_id] for task_id, degree in in_degree.items() if degree == 0),
+            key=lambda x: (x.priority, x.task_id),
+        ))
+
+        ordered_nodes: List[TaskNode] = []
+        while queue:
+            current = queue.popleft()
+            ordered_nodes.append(current)
+
+            for neighbor_id in adjacency.get(current.task_id, []):
+                in_degree[neighbor_id] -= 1
+                if in_degree[neighbor_id] == 0:
+                    queue.append(task_map[neighbor_id])
+            queue = deque(sorted(list(queue), key=lambda x: (x.priority, x.task_id)))
+
+        if len(ordered_nodes) != len(self.nodes):
+            raise ValueError("拓扑排序失败，任务图可能存在循环依赖")
+
+        return ordered_nodes
+
 
 class AcceptanceCriteria(BaseModel):
     """
@@ -333,3 +389,31 @@ class PlanSpec(BaseModel):
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat()
         }
+
+    def to_execution_signal(self) -> "PlanExecutionSignal":
+        """
+        转换为执行层可消费的信号结构
+        """
+        ordered_nodes = self.task_graph.topological_sort()
+        return PlanExecutionSignal(
+            plan_id=self.plan_id,
+            version=self.version,
+            execution_mode=self.task_graph.execution_mode,
+            tasks=[node.model_dump() for node in self.task_graph.nodes],
+            execution_sequence=[node.task_id for node in ordered_nodes],
+            assumptions=self.assumptions,
+            acceptance_criteria=self.acceptance_criteria.model_dump(),
+        )
+
+
+class PlanExecutionSignal(BaseModel):
+    """
+    Planner输出给Executor的标准信号
+    """
+    plan_id: str = Field(description="计划唯一标识")
+    version: int = Field(description="计划版本号")
+    execution_mode: Literal["sequential", "parallel", "adaptive"] = Field(description="建议执行模式")
+    tasks: List[Dict[str, Any]] = Field(description="任务节点详细信息列表")
+    execution_sequence: List[str] = Field(description="拓扑排序后的任务执行顺序")
+    assumptions: List[str] = Field(description="计划假设条件")
+    acceptance_criteria: Dict[str, Any] = Field(description="验收标准")

@@ -13,7 +13,8 @@ from graphrag_agent.agents.multi_agent.core.plan_spec import (
     ProblemStatement,
     TaskNode,
     TaskGraph,
-    AcceptanceCriteria
+    AcceptanceCriteria,
+    PlanExecutionSignal,
 )
 from graphrag_agent.agents.multi_agent.core.execution_record import (
     ExecutionRecord,
@@ -36,6 +37,7 @@ __all__ = [
     "TaskNode",
     "TaskGraph",
     "AcceptanceCriteria",
+    "PlanExecutionSignal",
     "ExecutionRecord",
     "ToolCall",
     "ReflectionResult",
