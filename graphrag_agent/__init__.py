@@ -15,7 +15,7 @@ __version__ = "0.1.0"
 from graphrag_agent.pipelines.ingestion import (
     DocumentProcessor,
     FileReader,
-    TextChunker
+    ChineseTextChunker
 )
 
 # ============ 2. 图谱构建模块 ============
@@ -111,7 +111,7 @@ __all__ = [
     # 文档处理
     'DocumentProcessor',
     'FileReader',
-    'TextChunker',
+    'ChineseTextChunker',
 
     # 图谱构建 - 核心
     'GraphConnectionManager',

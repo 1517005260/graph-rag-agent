@@ -31,6 +31,7 @@ from graphrag_agent.search.tool_registry import (
     EXTRA_TOOL_FACTORIES,
     create_extra_tool,
 )
+from graphrag_agent.agents.multi_agent.tools.evidence_tracker import get_evidence_tracker
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -101,7 +102,7 @@ class RetrievalExecutor(BaseExecutor):
             latency_ms=round(latency * 1000, 3),
         )
 
-        evidence = self._extract_evidence(structured_output) if success else []
+        evidence = self._extract_evidence(state, structured_output) if success else []
 
         metadata = ExecutionMetadata(
             worker_type=self.worker_type,
@@ -172,7 +173,11 @@ class RetrievalExecutor(BaseExecutor):
             )
         raise ValueError(f"任务类型 {task_type} 未提供可用的执行方法")
 
-    def _extract_evidence(self, output: Dict[str, Any]) -> List[RetrievalResult]:
+    def _extract_evidence(
+        self,
+        state: PlanExecuteState,
+        output: Dict[str, Any],
+    ) -> List[RetrievalResult]:
         results_payload = output.get("retrieval_results") if isinstance(output, dict) else None
         evidence: List[RetrievalResult] = []
         if not isinstance(results_payload, list):
@@ -186,7 +191,14 @@ class RetrievalExecutor(BaseExecutor):
                     evidence.append(RetrievalResult.from_dict(item))
             except Exception as exc:  # noqa: BLE001
                 _LOGGER.warning("无法解析retrieval_result: %s error=%s", item, exc)
-        return evidence
+        if not evidence:
+            return evidence
+        try:
+            tracker = get_evidence_tracker(state)
+            return tracker.register(evidence)
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("证据追踪失败，使用原始结果: %s", exc)
+            return evidence
 
     def _update_state(
         self,

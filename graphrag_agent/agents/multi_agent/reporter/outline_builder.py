@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 from typing import List, Dict, Any, Optional
-import json
 import logging
 
 from pydantic import BaseModel, Field
@@ -16,6 +15,7 @@ from langchain_core.messages import BaseMessage
 
 from graphrag_agent.config.prompts import OUTLINE_PROMPT
 from graphrag_agent.models.get_models import get_llm_model
+from graphrag_agent.agents.multi_agent.tools.json_parser import parse_json_text
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -85,16 +85,8 @@ class OutlineBuilder:
         """
         解析LLM返回的JSON字符串
         """
-        cleaned = response.strip()
-        if cleaned.startswith("```"):
-            segments = cleaned.split("```")
-            if len(segments) >= 3:
-                cleaned = segments[2] if segments[1].strip().startswith("json") else segments[1]
-        if "{" in cleaned and "}" in cleaned:
-            cleaned = cleaned[cleaned.find("{"): cleaned.rfind("}") + 1]
-
         try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError as exc:
+            return parse_json_text(response)
+        except ValueError as exc:
             _LOGGER.error("OutlineBuilder JSON解析失败: %s | 原始输出: %s", exc, response)
             raise ValueError("纲要生成结果解析失败") from exc

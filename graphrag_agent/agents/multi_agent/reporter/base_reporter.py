@@ -7,6 +7,8 @@ Reporter编排基类
 from __future__ import annotations
 
 from typing import List, Dict, Any, Optional, Iterable, Tuple
+import hashlib
+import json
 import logging
 
 from pydantic import BaseModel, Field
@@ -30,6 +32,8 @@ from graphrag_agent.agents.multi_agent.reporter.consistency_checker import (
     ConsistencyCheckResult,
 )
 from graphrag_agent.agents.multi_agent.reporter.formatter import CitationFormatter
+from graphrag_agent.agents.multi_agent.tools.evidence_tracker import EvidenceTracker
+from graphrag_agent.cache_manager.manager import CacheManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -79,12 +83,14 @@ class BaseReporter:
         section_writer: Optional[SectionWriter] = None,
         consistency_checker: Optional[ConsistencyChecker] = None,
         citation_formatter: Optional[CitationFormatter] = None,
+        cache_manager: Optional[CacheManager] = None,
     ) -> None:
         self.config = config or ReporterConfig()
         self._outline_builder = outline_builder or OutlineBuilder()
         self._section_writer = section_writer or SectionWriter(config=self.config.section_writer)
         self._consistency_checker = consistency_checker or ConsistencyChecker()
         self._citation_formatter = citation_formatter or CitationFormatter()
+        self._cache_manager = cache_manager
 
     def generate_report(
         self,
@@ -93,23 +99,42 @@ class BaseReporter:
         execution_records: Optional[List[ExecutionRecord]] = None,
         report_type: Optional[str] = None,
     ) -> ReportResult:
-        """
-        生成报告主流程
-        """
+        """生成报告主流程，支持report_id级缓存与分段复用"""
+
         plan = plan or state.plan
         if plan is None:
             raise ValueError("生成报告需要PlanSpec")
 
         execution_records = execution_records or state.execution_records
 
-        # 聚合证据
-        evidence_map = self._collect_evidence(execution_records)
-        plan_summary = self._build_plan_summary(plan)
-        evidence_summary, limited_ids = self._build_evidence_summary(evidence_map)
-
-        resolved_report_type = report_type or (state.report_context.report_type if state.report_context else None)
+        resolved_report_type = report_type or (
+            state.report_context.report_type if state.report_context else None
+        )
         if not resolved_report_type:
             resolved_report_type = self.config.default_report_type
+
+        report_id = self._resolve_report_id(plan, resolved_report_type)
+        evidence_map = self._collect_evidence(state, execution_records)
+        evidence_fingerprint = self._build_evidence_fingerprint(evidence_map)
+
+        cached_payload = self._load_cached_payload(report_id)
+        if (
+            cached_payload
+            and cached_payload.get("evidence_fingerprint") == evidence_fingerprint
+        ):
+            report_result = self._deserialize_report_result(cached_payload)
+            self._update_state_report_context(
+                state,
+                report_result,
+                report_id,
+                cache_hit=True,
+            )
+            state.response = report_result.final_report
+            state.update_timestamp()
+            return report_result
+
+        plan_summary = self._build_plan_summary(plan)
+        evidence_summary, limited_ids = self._build_evidence_summary(evidence_map)
 
         outline = self._outline_builder.build_outline(
             query=plan.problem_statement.original_query,
@@ -119,9 +144,28 @@ class BaseReporter:
             report_type=resolved_report_type,
         )
 
+        section_cache_index = self._build_section_cache_index(cached_payload)
         section_contents: List[SectionContent] = []
         used_evidence_ids: List[str] = []
+
         for section in outline.sections:
+            cached_section = section_cache_index.get(section.section_id)
+            if cached_section and self._can_reuse_section(
+                section,
+                cached_section,
+                evidence_fingerprint,
+            ):
+                section_contents.append(
+                    SectionContent(
+                        section_id=section.section_id,
+                        title=section.title,
+                        content=cached_section["content"],
+                        used_evidence_ids=list(cached_section["used_evidence_ids"]),
+                    )
+                )
+                used_evidence_ids.extend(cached_section["used_evidence_ids"])
+                continue
+
             draft = self._section_writer.write_section(
                 outline=outline,
                 section=section,
@@ -144,7 +188,9 @@ class BaseReporter:
         if self.config.enable_consistency_check and evidence_map:
             evidence_text = self._format_evidence_for_check(evidence_map.values())
             try:
-                consistency_result = self._consistency_checker.check(final_report, evidence_text)
+                consistency_result = self._consistency_checker.check(
+                    final_report, evidence_text
+                )
             except Exception as exc:  # noqa: BLE001
                 _LOGGER.warning("一致性检查失败: %s", exc)
 
@@ -158,16 +204,37 @@ class BaseReporter:
             consistency_check=consistency_result,
         )
 
-        self._update_state_report_context(state, report_result)
+        self._save_report_cache(
+            report_id,
+            evidence_fingerprint,
+            report_result,
+            outline,
+            evidence_map,
+        )
+
+        self._update_state_report_context(
+            state,
+            report_result,
+            report_id,
+            cache_hit=False,
+        )
         state.response = final_report
         state.update_timestamp()
         return report_result
 
-    def _collect_evidence(self, execution_records: Iterable[ExecutionRecord]) -> Dict[str, RetrievalResult]:
-        """
-        从执行记录中提取标准化的RetrievalResult
-        """
+    def _collect_evidence(
+        self,
+        state: PlanExecuteState,
+        execution_records: Iterable[ExecutionRecord],
+    ) -> Dict[str, RetrievalResult]:
+        """从执行记录与执行上下文中聚合标准化的RetrievalResult"""
+
         evidence_map: Dict[str, RetrievalResult] = {}
+
+        tracker = _extract_tracker_from_state(state)
+        if tracker is not None:
+            for result in tracker.all_results():
+                evidence_map[result.result_id] = result
 
         for record in execution_records:
             for item in record.evidence:
@@ -271,7 +338,144 @@ class BaseReporter:
             return None
         return self._citation_formatter.format_references(results, self.config.citation_style)
 
-    def _update_state_report_context(self, state: PlanExecuteState, report_result: ReportResult) -> None:
+    def _resolve_report_id(self, plan: PlanSpec, report_type: str) -> str:
+        """生成用于缓存的report_id"""
+        return f"{plan.plan_id}:{plan.version}:{report_type}"
+
+    def _build_evidence_fingerprint(
+        self,
+        evidence_map: Dict[str, RetrievalResult],
+    ) -> Dict[str, str]:
+        fingerprint: Dict[str, str] = {}
+        for rid, result in evidence_map.items():
+            payload = {
+                "granularity": result.granularity,
+                "source": result.source,
+                "score": result.score,
+                "metadata": result.metadata.model_dump(mode="json"),
+            }
+            fingerprint[rid] = hashlib.sha1(
+                json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()
+        return fingerprint
+
+    def _load_cached_payload(self, report_id: str) -> Optional[Dict[str, Any]]:
+        if self._cache_manager is None:
+            return None
+        cached = self._cache_manager.get(report_id, skip_validation=True)
+        if isinstance(cached, dict):
+            return cached
+        return None
+
+    def _build_section_cache_index(
+        self,
+        cached_payload: Optional[Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
+        if not cached_payload:
+            return {}
+        index: Dict[str, Dict[str, Any]] = {}
+        for item in cached_payload.get("sections", []):
+            if isinstance(item, dict) and item.get("section_id"):
+                index[item["section_id"]] = item
+        return index
+
+    def _can_reuse_section(
+        self,
+        section: SectionOutline,
+        cached_section: Dict[str, Any],
+        evidence_fingerprint: Dict[str, str],
+    ) -> bool:
+        if cached_section.get("title") != section.title:
+            return False
+        if cached_section.get("summary") != section.summary:
+            return False
+        cached_fp: Dict[str, str] = cached_section.get("evidence_fingerprint", {})  # type: ignore[assignment]
+        for evidence_id in cached_section.get("used_evidence_ids", []):
+            if evidence_fingerprint.get(evidence_id) != cached_fp.get(evidence_id):
+                return False
+        return True
+
+    def _save_report_cache(
+        self,
+        report_id: str,
+        evidence_fingerprint: Dict[str, str],
+        report_result: ReportResult,
+        outline: ReportOutline,
+        evidence_map: Dict[str, RetrievalResult],
+    ) -> None:
+        if self._cache_manager is None:
+            return
+
+        outline_lookup = {section.section_id: section for section in outline.sections}
+        sections_payload: List[Dict[str, Any]] = []
+        for section in report_result.sections:
+            outline_section = outline_lookup.get(section.section_id)
+            summary = outline_section.summary if outline_section else ""
+            sections_payload.append(
+                {
+                    "section_id": section.section_id,
+                    "title": section.title,
+                    "summary": summary,
+                    "content": section.content,
+                    "used_evidence_ids": list(section.used_evidence_ids),
+                    "evidence_fingerprint": {
+                        eid: evidence_fingerprint.get(eid)
+                        for eid in section.used_evidence_ids
+                        if eid in evidence_fingerprint
+                    },
+                }
+            )
+
+        payload = {
+            "outline": report_result.outline.model_dump(mode="json"),
+            "sections": sections_payload,
+            "final_report": report_result.final_report,
+            "references": report_result.references,
+            "consistency_check": (
+                report_result.consistency_check.model_dump(mode="json")
+                if report_result.consistency_check
+                else None
+            ),
+            "evidence_fingerprint": evidence_fingerprint,
+            "evidence_ids": list(evidence_map.keys()),
+        }
+
+        try:
+            self._cache_manager.set(report_id, payload)
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("写入报告缓存失败: %s", exc)
+
+    def _deserialize_report_result(self, payload: Dict[str, Any]) -> ReportResult:
+        outline = ReportOutline(**payload.get("outline", {}))
+        sections = [
+            SectionContent(
+                section_id=item.get("section_id", ""),
+                title=item.get("title", ""),
+                content=item.get("content", ""),
+                used_evidence_ids=list(item.get("used_evidence_ids", [])),
+            )
+            for item in payload.get("sections", [])
+            if isinstance(item, dict)
+        ]
+        consistency = None
+        if payload.get("consistency_check"):
+            consistency = ConsistencyCheckResult(**payload["consistency_check"])
+
+        return ReportResult(
+            outline=outline,
+            sections=sections,
+            final_report=payload.get("final_report", ""),
+            references=payload.get("references"),
+            consistency_check=consistency,
+        )
+
+    def _update_state_report_context(
+        self,
+        state: PlanExecuteState,
+        report_result: ReportResult,
+        report_id: str,
+        cache_hit: bool,
+    ) -> None:
         """
         将报告结果写回PlanExecuteState的report_context
         """
@@ -292,3 +496,18 @@ class BaseReporter:
             if report_result.consistency_check
             else None
         )
+        context.report_id = report_id
+        context.cache_hit = cache_hit
+
+
+def _extract_tracker_from_state(state: PlanExecuteState) -> Optional[EvidenceTracker]:
+    if state.execution_context is None:
+        return None
+    registry = state.execution_context.evidence_registry.get("tracker", {})
+    tracker = registry.get("_instance")
+    if isinstance(tracker, EvidenceTracker):
+        return tracker
+    tracker_state = registry.get("state")
+    if isinstance(tracker_state, dict):
+        return EvidenceTracker(tracker_state)  # type: ignore[arg-type]
+    return None

@@ -83,11 +83,20 @@ class ExecutionContext(BaseModel):
         description="执行过程中的错误记录"
     )
 
+    # 证据追踪注册表
+    evidence_registry: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="证据追踪器使用的注册表，用于去重与统计"
+    )
+
     # 创建时间
     created_at: datetime = Field(default_factory=datetime.now)
 
     # 更新时间
     updated_at: datetime = Field(default_factory=datetime.now)
+
+    class Config:
+        arbitrary_types_allowed = True
 
 
 class ReportContext(BaseModel):
@@ -124,6 +133,18 @@ class ReportContext(BaseModel):
     report_type: str = Field(
         default="short_answer",
         description="报告类型: short_answer(短回答) | long_document(长文档)"
+    )
+
+    # 报告缓存标识
+    report_id: Optional[str] = Field(
+        default=None,
+        description="当前报告对应的缓存ID"
+    )
+
+    # 缓存命中标识
+    cache_hit: bool = Field(
+        default=False,
+        description="是否命中了报告缓存"
     )
 
     # 创建时间
@@ -207,6 +228,8 @@ class PlanExecuteState(BaseModel):
             self.plan_context = PlanContext(original_query=self.input)
         if self.execution_context is None:
             self.execution_context = ExecutionContext()
+        elif self.execution_context.evidence_registry is None:
+            self.execution_context.evidence_registry = {}
         if self.report_context is None:
             self.report_context = ReportContext()
 

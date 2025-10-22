@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 from typing import Optional, Dict, Any, List
-import json
 import logging
 
 from pydantic import BaseModel, Field
@@ -21,6 +20,7 @@ from graphrag_agent.agents.multi_agent.core.plan_spec import (
     TaskNode,
     TASK_TYPE_CHOICES,
 )
+from graphrag_agent.agents.multi_agent.tools.json_parser import parse_json_text
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,22 +83,9 @@ class TaskDecomposer:
         return content.strip()
 
     def _parse_response(self, response: str) -> Dict[str, Any]:
-        """
-        解析任务分解输出
-
-        支持自动剥离Markdown包裹
-        """
-        cleaned = response.strip()
-        if cleaned.startswith("```"):
-            segments = cleaned.split("```")
-            if len(segments) >= 3:
-                cleaned = segments[2] if segments[1].strip().startswith("json") else segments[1]
-        if "{" in cleaned and "}" in cleaned:
-            cleaned = cleaned[cleaned.find("{"): cleaned.rfind("}") + 1]
-
         try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError as exc:
+            return parse_json_text(response)
+        except ValueError as exc:
             _LOGGER.error("TaskDecomposer JSON解析失败: %s | 原始输出: %s", exc, response)
             raise ValueError("无法解析任务分解输出为有效JSON") from exc
 

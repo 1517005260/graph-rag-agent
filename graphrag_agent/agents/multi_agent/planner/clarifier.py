@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 from typing import Optional, Any, Dict, List
-import json
 import logging
 
 from pydantic import BaseModel, Field
@@ -17,6 +16,7 @@ from langchain_core.messages import BaseMessage
 from graphrag_agent.config.prompts import CLARIFY_PROMPT
 from graphrag_agent.models.get_models import get_llm_model
 from graphrag_agent.agents.multi_agent.core.state import PlanContext
+from graphrag_agent.agents.multi_agent.tools.json_parser import parse_json_text
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -99,24 +99,9 @@ class Clarifier:
         return content.strip()
 
     def _parse_response(self, response: str) -> Dict[str, Any]:
-        """
-        将LLM输出解析为JSON结构
-
-        会尝试去除Markdown代码块并做简单纠错
-        """
-        cleaned = response.strip()
-        if cleaned.startswith("```"):
-            # 去掉可能存在的```json包裹
-            cleaned = cleaned.split("```", maxsplit=2)[1:]
-            cleaned = cleaned[1] if len(cleaned) == 2 else cleaned[0]
-        # 提取首尾花括号之间的内容
-        if "{" in cleaned and "}" in cleaned:
-            start = cleaned.find("{")
-            end = cleaned.rfind("}") + 1
-            cleaned = cleaned[start:end]
-
+        """将LLM输出解析为JSON结构"""
         try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError as exc:
+            return parse_json_text(response)
+        except ValueError as exc:
             _LOGGER.error("Clarifier JSON解析失败: %s | 原始输出: %s", exc, response)
             raise ValueError("无法解析澄清节点输出为有效JSON") from exc

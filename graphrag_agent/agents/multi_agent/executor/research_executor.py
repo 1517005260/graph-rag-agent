@@ -29,6 +29,7 @@ from graphrag_agent.agents.multi_agent.executor.base_executor import (
     ExecutorConfig,
     TaskExecutionResult,
 )
+from graphrag_agent.agents.multi_agent.tools.evidence_tracker import get_evidence_tracker
 from graphrag_agent.search.tool_registry import TOOL_REGISTRY
 
 _LOGGER = logging.getLogger(__name__)
@@ -83,7 +84,11 @@ class ResearchExecutor(BaseExecutor):
             latency_ms=round(latency * 1000, 3),
         )
 
-        evidence = self._wrap_research_evidence(task, tool_name, result_payload) if success else []
+        evidence = (
+            self._wrap_research_evidence(state, task, tool_name, result_payload)
+            if success
+            else []
+        )
 
         metadata = ExecutionMetadata(
             worker_type=self.worker_type,
@@ -121,6 +126,7 @@ class ResearchExecutor(BaseExecutor):
 
     def _wrap_research_evidence(
         self,
+        state: PlanExecuteState,
         task: TaskNode,
         tool_name: str,
         result_payload: Any,
@@ -146,7 +152,12 @@ class ResearchExecutor(BaseExecutor):
             source=tool_name,  # 与RetrievalResult枚举保持一致
             score=0.65,
         )
-        return [result]
+        try:
+            tracker = get_evidence_tracker(state)
+            return tracker.register([result])
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("研究结果登记证据失败，使用原始结果: %s", exc)
+            return [result]
 
     def _update_state(
         self,
