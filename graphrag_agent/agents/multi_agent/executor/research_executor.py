@@ -3,9 +3,6 @@
 
 负责处理深度研究类任务，调用DeepResearch/DeeperResearch工具并生成结构化ExecutionRecord。
 """
-
-from __future__ import annotations
-
 from typing import Any, Dict, Optional, List
 import time
 import logging

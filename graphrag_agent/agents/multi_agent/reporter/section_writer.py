@@ -3,9 +3,6 @@
 
 实现分批写作能力，支持超过LLM上下文长度的长文档生成
 """
-
-from __future__ import annotations
-
 from typing import List, Dict, Any, Optional, Iterable
 import logging
 import textwrap
@@ -93,7 +90,9 @@ class SectionWriter:
 
         for batch_index, batch in enumerate(batches, start=1):
             evidence_list_text = self._format_evidence(batch)
-            outline_json = outline.model_dump_json(ensure_ascii=False)
+            # Pydantic v1 使用 json(), v2 使用 model_dump_json()，但参数名不同
+            import json
+            outline_json = json.dumps(outline.model_dump(mode="json"), ensure_ascii=False)
             context_instruction = ""
 
             if self.config.enable_multi_pass and len(batches) > 1:

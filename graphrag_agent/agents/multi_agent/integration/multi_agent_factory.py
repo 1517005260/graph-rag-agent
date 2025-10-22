@@ -1,9 +1,6 @@
 """
 构建多智能体编排器所需组件的工厂工具。
 """
-
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Optional
 

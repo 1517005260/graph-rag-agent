@@ -4,9 +4,6 @@
 负责串联 Planner → WorkerCoordinator → Reporter，形成完整的
 Plan-Execute-Report 生命周期。
 """
-
-from __future__ import annotations
-
 from typing import List, Optional, Sequence, Literal
 import logging
 import time

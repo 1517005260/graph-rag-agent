@@ -4,9 +4,6 @@
 旧版协调器通过 ``process_query`` 返回答案和调试信息。本文件提供等价
 接口，但实际执行委托给新的 Plan-Execute-Report 流程。
 """
-
-from __future__ import annotations
-
 from typing import Any, Dict, Iterable, Optional, Sequence
 
 from langchain_core.messages import HumanMessage
@@ -21,7 +18,7 @@ from graphrag_agent.agents.multi_agent.orchestrator import OrchestratorResult
 
 
 class MultiAgentFacade:
-    """对外暴露稳定接口，便于旧系统逐步迁移到新框架。"""
+    """对外暴露稳定接口"""
 
     def __init__(
         self,

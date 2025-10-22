@@ -3,9 +3,6 @@
 
 根据PlanExecutionSignal调度不同类型的Worker执行任务。
 """
-
-from __future__ import annotations
-
 from typing import Dict, List, Optional
 import logging
 

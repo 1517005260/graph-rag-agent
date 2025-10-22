@@ -3,9 +3,6 @@
 
 负责解析PlanExecutionSignal中的检索类任务并调用既有搜索工具（local/global/chain等）。
 """
-
-from __future__ import annotations
-
 from typing import Any, Dict, List, Optional
 import time
 import logging

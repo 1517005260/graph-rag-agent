@@ -3,9 +3,6 @@
 
 将不同搜索工具的原始输出统一转换为RetrievalResult数据模型，便于多Agent管线消费。
 """
-
-from __future__ import annotations
-
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 import uuid
@@ -175,13 +172,16 @@ def results_from_relationships(
             extra={"raw_relationship": relation},
         )
         evidence = description or f"{relation.get('start')} -{relation.get('type')}-> {relation.get('end')}"
+        # 将 weight 归一化到 [0, 1] 范围，避免超出 score 的验证范围
+        raw_weight = relation.get("weight", confidence)
+        normalized_score = min(1.0, max(0.0, raw_weight / 10.0 if raw_weight > 1.0 else raw_weight))
         results.append(
             create_retrieval_result(
                 evidence=evidence,
                 source=source,
                 granularity="AtomicKnowledge",
                 metadata=metadata,
-                score=relation.get("weight", confidence),
+                score=normalized_score,
             )
         )
     return results

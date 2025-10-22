@@ -3,9 +3,6 @@
 
 根据PlanSpec与执行证据构建结构化报告纲要
 """
-
-from __future__ import annotations
-
 from typing import List, Dict, Any, Optional
 import logging
 

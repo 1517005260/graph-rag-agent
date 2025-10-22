@@ -3,9 +3,6 @@ Planner编排基类
 
 整合Clarifier、TaskDecomposer、PlanReviewer，输出结构化的PlanSpec
 """
-
-from __future__ import annotations
-
 from typing import Optional, List
 import logging
 
@@ -43,7 +40,7 @@ class PlannerConfig(BaseModel):
     """
     max_tasks: int = Field(default=6, description="单次任务分解允许的最大任务数")
     allow_unclarified_plan: bool = Field(
-        default=False,
+        default=True,
         description="若存在未解决的澄清问题，是否强制继续生成计划",
     )
     default_domain: str = Field(default="通用", description="默认领域背景，用于澄清提示")
@@ -83,7 +80,9 @@ class PlannerResult(BaseModel):
         """
         if self.executor_signal is None:
             return None
-        return self.executor_signal.model_dump_json(ensure_ascii=False, indent=2)
+        # Pydantic v1/v2 兼容性处理
+        import json
+        return json.dumps(self.executor_signal.model_dump(mode="json"), ensure_ascii=False, indent=2)
 
 
 class BasePlanner:

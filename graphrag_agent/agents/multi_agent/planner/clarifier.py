@@ -3,9 +3,6 @@
 
 负责根据用户原始查询识别模糊点并生成澄清问题
 """
-
-from __future__ import annotations
-
 from typing import Optional, Any, Dict, List
 import logging
 

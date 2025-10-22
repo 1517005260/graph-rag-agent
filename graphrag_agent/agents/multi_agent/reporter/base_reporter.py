@@ -3,13 +3,11 @@ Reporter编排基类
 
 负责串联纲要生成、章节写作、引用整理与一致性校验
 """
-
-from __future__ import annotations
-
 from typing import List, Dict, Any, Optional, Iterable, Tuple
 import hashlib
 import json
 import logging
+import asyncio
 
 from pydantic import BaseModel, Field
 
@@ -32,6 +30,13 @@ from graphrag_agent.agents.multi_agent.reporter.consistency_checker import (
     ConsistencyCheckResult,
 )
 from graphrag_agent.agents.multi_agent.reporter.formatter import CitationFormatter
+from graphrag_agent.agents.multi_agent.reporter.mapreduce import (
+    EvidenceMapper,
+    EvidenceSummary,
+    SectionReducer,
+    ReduceStrategy,
+    ReportAssembler,
+)
 from graphrag_agent.agents.multi_agent.tools.evidence_tracker import EvidenceTracker
 from graphrag_agent.cache_manager.manager import CacheManager
 
@@ -47,6 +52,11 @@ class ReporterConfig(BaseModel):
     max_evidence_summary: int = Field(default=30, description="纲要生成时展示的最大证据条数")
     section_writer: SectionWriterConfig = Field(default_factory=SectionWriterConfig, description="章节写作配置")
     enable_consistency_check: bool = Field(default=True, description="是否启用一致性检查")
+    enable_mapreduce: bool = Field(default=True, description="是否启用Map-Reduce写作模式")
+    reduce_strategy: ReduceStrategy = Field(default=ReduceStrategy.TREE, description="章节Reduce策略")
+    max_tokens_per_reduce: int = Field(default=4000, ge=1000, description="Reduce阶段单次调用的最大token估算")
+    enable_parallel_map: bool = Field(default=True, description="证据Map阶段是否启用并行")
+    mapreduce_evidence_threshold: int = Field(default=20, ge=0, description="触发Map-Reduce模式的证据数量阈值")
 
 
 class SectionContent(BaseModel):
@@ -84,6 +94,9 @@ class BaseReporter:
         consistency_checker: Optional[ConsistencyChecker] = None,
         citation_formatter: Optional[CitationFormatter] = None,
         cache_manager: Optional[CacheManager] = None,
+        evidence_mapper: Optional[EvidenceMapper] = None,
+        section_reducer: Optional[SectionReducer] = None,
+        report_assembler: Optional[ReportAssembler] = None,
     ) -> None:
         self.config = config or ReporterConfig()
         self._outline_builder = outline_builder or OutlineBuilder()
@@ -91,6 +104,9 @@ class BaseReporter:
         self._consistency_checker = consistency_checker or ConsistencyChecker()
         self._citation_formatter = citation_formatter or CitationFormatter()
         self._cache_manager = cache_manager
+        self._evidence_mapper = evidence_mapper
+        self._section_reducer = section_reducer
+        self._report_assembler = report_assembler
 
     def generate_report(
         self,
@@ -145,44 +161,31 @@ class BaseReporter:
         )
 
         section_cache_index = self._build_section_cache_index(cached_payload)
-        section_contents: List[SectionContent] = []
-        used_evidence_ids: List[str] = []
+        use_mapreduce = self._should_use_mapreduce(evidence_map)
 
-        for section in outline.sections:
-            cached_section = section_cache_index.get(section.section_id)
-            if cached_section and self._can_reuse_section(
-                section,
-                cached_section,
-                evidence_fingerprint,
-            ):
-                section_contents.append(
-                    SectionContent(
-                        section_id=section.section_id,
-                        title=section.title,
-                        content=cached_section["content"],
-                        used_evidence_ids=list(cached_section["used_evidence_ids"]),
-                    )
-                )
-                used_evidence_ids.extend(cached_section["used_evidence_ids"])
-                continue
-
-            draft = self._section_writer.write_section(
+        if use_mapreduce:
+            section_contents, used_evidence_ids = self._generate_sections_mapreduce(
                 outline=outline,
-                section=section,
                 evidence_map=evidence_map,
+                section_cache_index=section_cache_index,
+                evidence_fingerprint=evidence_fingerprint,
                 fallback_evidence_ids=limited_ids,
             )
-            section_contents.append(
-                SectionContent(
-                    section_id=section.section_id,
-                    title=section.title,
-                    content=draft.content,
-                    used_evidence_ids=draft.used_evidence_ids,
-                )
+            final_report = self._assemble_report_mapreduce(
+                outline=outline,
+                section_contents=section_contents,
+                query=plan.problem_statement.original_query,
+                evidence_count=len(evidence_map),
             )
-            used_evidence_ids.extend(draft.used_evidence_ids)
-
-        final_report = self._assemble_report(outline, section_contents)
+        else:
+            section_contents, used_evidence_ids = self._generate_sections_traditional(
+                outline=outline,
+                evidence_map=evidence_map,
+                section_cache_index=section_cache_index,
+                evidence_fingerprint=evidence_fingerprint,
+                fallback_evidence_ids=limited_ids,
+            )
+            final_report = self._assemble_report(outline, section_contents)
 
         consistency_result: Optional[ConsistencyCheckResult] = None
         if self.config.enable_consistency_check and evidence_map:
@@ -286,6 +289,222 @@ class BaseReporter:
             limited_ids.append(result.result_id)
         summary_text = "\n".join(lines) if lines else "无结构化证据"
         return summary_text, limited_ids
+
+    def _should_use_mapreduce(
+        self,
+        evidence_map: Dict[str, RetrievalResult],
+    ) -> bool:
+        """
+        判断是否启用Map-Reduce模式。
+        """
+        if not self.config.enable_mapreduce:
+            return False
+        return len(evidence_map) >= self.config.mapreduce_evidence_threshold
+
+    def _generate_sections_traditional(
+        self,
+        outline: ReportOutline,
+        evidence_map: Dict[str, RetrievalResult],
+        section_cache_index: Dict[str, Dict[str, Any]],
+        evidence_fingerprint: Dict[str, str],
+        fallback_evidence_ids: List[str],
+    ) -> Tuple[List[SectionContent], List[str]]:
+        section_contents: List[SectionContent] = []
+        used_evidence_ids: List[str] = []
+
+        for section in outline.sections:
+            cached_section = section_cache_index.get(section.section_id)
+            if cached_section and self._can_reuse_section(
+                section,
+                cached_section,
+                evidence_fingerprint,
+            ):
+                section_contents.append(
+                    SectionContent(
+                        section_id=section.section_id,
+                        title=section.title,
+                        content=cached_section["content"],
+                        used_evidence_ids=list(cached_section["used_evidence_ids"]),
+                    )
+                )
+                used_evidence_ids.extend(cached_section["used_evidence_ids"])
+                continue
+
+            draft = self._section_writer.write_section(
+                outline=outline,
+                section=section,
+                evidence_map=evidence_map,
+                fallback_evidence_ids=fallback_evidence_ids,
+            )
+            section_contents.append(
+                SectionContent(
+                    section_id=section.section_id,
+                    title=section.title,
+                    content=draft.content,
+                    used_evidence_ids=draft.used_evidence_ids,
+                )
+            )
+            used_evidence_ids.extend(draft.used_evidence_ids)
+
+        return section_contents, used_evidence_ids
+
+    def _generate_sections_mapreduce(
+        self,
+        outline: ReportOutline,
+        evidence_map: Dict[str, RetrievalResult],
+        section_cache_index: Dict[str, Dict[str, Any]],
+        evidence_fingerprint: Dict[str, str],
+        fallback_evidence_ids: List[str],
+    ) -> Tuple[List[SectionContent], List[str]]:
+        self._ensure_mapreduce_components()
+        assert self._evidence_mapper is not None
+        assert self._section_reducer is not None
+
+        section_contents: List[SectionContent] = []
+        all_used_ids: List[str] = []
+
+        for section in outline.sections:
+            cached_section = section_cache_index.get(section.section_id)
+            if cached_section and self._can_reuse_section(
+                section,
+                cached_section,
+                evidence_fingerprint,
+            ):
+                section_contents.append(
+                    SectionContent(
+                        section_id=section.section_id,
+                        title=section.title,
+                        content=cached_section["content"],
+                        used_evidence_ids=list(cached_section["used_evidence_ids"]),
+                    )
+                )
+                all_used_ids.extend(cached_section["used_evidence_ids"])
+                continue
+
+            evidence_entries = self._collect_section_evidence(
+                section,
+                evidence_map,
+                fallback_evidence_ids,
+            )
+            if not evidence_entries:
+                section_contents.append(
+                    SectionContent(
+                        section_id=section.section_id,
+                        title=section.title,
+                        content="",
+                        used_evidence_ids=[],
+                    )
+                )
+                continue
+            evidence_batches = self._evidence_mapper.split_batches(evidence_entries)
+            evidence_summaries = self._map_evidence_batches(evidence_batches, section)
+
+            section_text = self._section_reducer.reduce(
+                evidence_summaries,
+                section,
+                max_tokens=self.config.max_tokens_per_reduce,
+            )
+
+            used_ids: List[str] = []
+            for summary in evidence_summaries:
+                for evidence_id in summary.evidence_ids:
+                    if evidence_id not in used_ids:
+                        used_ids.append(evidence_id)
+
+            section_contents.append(
+                SectionContent(
+                    section_id=section.section_id,
+                    title=section.title,
+                    content=section_text.strip(),
+                    used_evidence_ids=used_ids,
+                )
+            )
+            all_used_ids.extend(used_ids)
+
+        return section_contents, all_used_ids
+
+    def _collect_section_evidence(
+        self,
+        section: SectionOutline,
+        evidence_map: Dict[str, RetrievalResult],
+        fallback_evidence_ids: List[str],
+    ) -> List[RetrievalResult]:
+        if section.evidence_ids:
+            candidate_ids = [eid for eid in section.evidence_ids if eid in evidence_map]
+        elif fallback_evidence_ids:
+            candidate_ids = [eid for eid in fallback_evidence_ids if eid in evidence_map]
+        else:
+            candidate_ids = list(evidence_map.keys())
+        return [evidence_map[eid] for eid in candidate_ids]
+
+    def _map_evidence_batches(
+        self,
+        evidence_batches: List[List[RetrievalResult]],
+        section: SectionOutline,
+    ) -> List[EvidenceSummary]:
+        assert self._evidence_mapper is not None
+
+        if not evidence_batches:
+            return []
+
+        if self.config.enable_parallel_map:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop and loop.is_running():
+                _LOGGER.debug("检测到事件循环正在运行，Map阶段退化为串行执行")
+            else:
+                return asyncio.run(
+                    self._evidence_mapper.map_parallel(
+                        evidence_batches,
+                        section,
+                    )
+                )
+
+        return [
+            self._evidence_mapper.map_evidence_batch(
+                batch,
+                section,
+                batch_index=index,
+            )
+            for index, batch in enumerate(evidence_batches)
+        ]
+
+    def _assemble_report_mapreduce(
+        self,
+        outline: ReportOutline,
+        section_contents: List[SectionContent],
+        *,
+        query: str,
+        evidence_count: int,
+    ) -> str:
+        self._ensure_mapreduce_components()
+        assert self._report_assembler is not None
+        section_payload = {
+            section.section_id: section.content
+            for section in section_contents
+        }
+        return self._report_assembler.assemble(
+            outline,
+            section_payload,
+            global_context={
+                "query": query,
+                "evidence_count": evidence_count,
+            },
+        )
+
+    def _ensure_mapreduce_components(self) -> None:
+        if self._evidence_mapper is None:
+            self._evidence_mapper = EvidenceMapper(
+                max_evidence_per_batch=self.config.section_writer.max_evidence_per_call,
+            )
+        if self._section_reducer is None:
+            self._section_reducer = SectionReducer(
+                strategy=self.config.reduce_strategy,
+            )
+        if self._report_assembler is None:
+            self._report_assembler = ReportAssembler()
 
     def _assemble_report(self, outline: ReportOutline, sections: List[SectionContent]) -> str:
         """

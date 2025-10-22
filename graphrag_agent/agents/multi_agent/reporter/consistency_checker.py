@@ -1,9 +1,6 @@
 """
 一致性校验模块
 """
-
-from __future__ import annotations
-
 from typing import Dict, Any, Optional
 import logging
 

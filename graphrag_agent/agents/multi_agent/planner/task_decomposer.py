@@ -3,9 +3,6 @@
 
 负责将清晰的查询拆解为结构化的任务图(TaskGraph)
 """
-
-from __future__ import annotations
-
 from typing import Optional, Dict, Any, List
 import logging
 

@@ -3,9 +3,6 @@
 
 为不同类型的Worker（检索、研究、反思）提供统一的配置、输入规范与结果包装。
 """
-
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 import copy

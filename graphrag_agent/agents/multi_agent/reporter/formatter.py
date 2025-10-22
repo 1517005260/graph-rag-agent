@@ -1,9 +1,6 @@
 """
 引用格式化模块
 """
-
-from __future__ import annotations
-
 from typing import Iterable, List
 
 from langchain_core.language_models.chat_models import BaseChatModel

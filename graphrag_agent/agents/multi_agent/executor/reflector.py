@@ -3,9 +3,6 @@
 
 基于 AnswerValidationTool 对既有任务输出进行质量校验，并产出反思结果。
 """
-
-from __future__ import annotations
-
 from typing import Any, Dict, Optional, Tuple, List
 import time
 
