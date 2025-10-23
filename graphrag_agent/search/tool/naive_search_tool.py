@@ -7,7 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 from graphrag_agent.config.prompt import NAIVE_PROMPT
-from graphrag_agent.config.settings import response_type, naive_description
+from graphrag_agent.config.settings import response_type, naive_description, NAIVE_SEARCH_TOP_K
 from graphrag_agent.search.tool.base import BaseSearchTool
 from graphrag_agent.search.utils import VectorUtils
 
@@ -21,7 +21,7 @@ class NaiveSearchTool(BaseSearchTool):
         super().__init__(cache_dir="./cache/naive_search")
         
         # 搜索参数设置
-        self.top_k = 3 # 检索的最大文档数量
+        self.top_k = NAIVE_SEARCH_TOP_K  # 检索的最大文档数量
         
         # 设置处理链
         self._setup_chains()

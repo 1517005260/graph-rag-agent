@@ -6,6 +6,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from graphrag_agent.config.prompt import LC_SYSTEM_PROMPT
 from graphrag_agent.config.neo4jdb import get_db_manager
+from graphrag_agent.config.settings import LOCAL_SEARCH_SETTINGS
 
 class LocalSearch:
     """
@@ -37,12 +38,16 @@ class LocalSearch:
         self.driver = db_manager.get_driver()
         
         # 设置检索参数
-        self.top_chunks = 3         # 最多返回的文本块数
-        self.top_communities = 3    # 最多返回的社区数
-        self.top_outside_rels = 10  # 最多返回的外部关系数
-        self.top_inside_rels = 10   # 最多返回的内部关系数
-        self.top_entities = 10      # 最多返回的实体数
-        self.index_name = 'vector'  # 向量索引名称
+        self.top_chunks = LOCAL_SEARCH_SETTINGS["top_chunks"]
+        self.top_communities = LOCAL_SEARCH_SETTINGS["top_communities"]
+        self.top_outside_rels = LOCAL_SEARCH_SETTINGS[
+            "top_outside_relationships"
+        ]
+        self.top_inside_rels = LOCAL_SEARCH_SETTINGS[
+            "top_inside_relationships"
+        ]
+        self.top_entities = LOCAL_SEARCH_SETTINGS["top_entities"]
+        self.index_name = LOCAL_SEARCH_SETTINGS["index_name"]
         
         # 初始化社区节点权重
         self._init_community_weights()

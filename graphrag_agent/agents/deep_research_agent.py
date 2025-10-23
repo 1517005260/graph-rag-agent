@@ -1,4 +1,4 @@
-from typing import List, Dict, AsyncGenerator
+from typing import List, Dict, AsyncGenerator, Optional
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -230,7 +230,7 @@ class DeepResearchAgent(BaseAgent):
             error_msg = f"处理思考过程时出错: {str(e)}"
             return {"messages": [AIMessage(content=error_msg)]}
     
-    def ask(self, query: str, thread_id: str = "default", recursion_limit: int = 5, 
+    def ask(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None, 
             show_thinking: bool = False, exploration_mode: bool = False):
         """
         向Agent提问，可选显示思考过程
@@ -301,7 +301,7 @@ class DeepResearchAgent(BaseAgent):
             return result
     
     async def ask_stream(self, query: str, thread_id: str = "default", 
-                         recursion_limit: int = 5, show_thinking: bool = False) -> AsyncGenerator[str, None]:
+                         recursion_limit: Optional[int] = None, show_thinking: bool = False) -> AsyncGenerator[str, None]:
         """
         向Agent提问，返回流式响应
         
@@ -325,7 +325,7 @@ class DeepResearchAgent(BaseAgent):
                 buffer += chunks[i]
                 
                 # 当缓冲区包含完整句子或达到合理大小时输出
-                if (i % 2 == 1) or len(buffer) >= 80:
+                if (i % 2 == 1) or len(buffer) >= self.deep_stream_flush_threshold:
                     yield buffer
                     buffer = ""
                     await asyncio.sleep(0.01)

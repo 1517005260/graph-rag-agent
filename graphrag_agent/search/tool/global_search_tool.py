@@ -7,7 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 from graphrag_agent.config.prompt import MAP_SYSTEM_PROMPT, REDUCE_SYSTEM_PROMPT
-from graphrag_agent.config.settings import gl_description
+from graphrag_agent.config.settings import gl_description, GLOBAL_SEARCH_SETTINGS
 from graphrag_agent.search.tool.base import BaseSearchTool
 from graphrag_agent.search.retrieval_adapter import (
     create_retrieval_metadata,
@@ -19,7 +19,7 @@ from graphrag_agent.search.retrieval_adapter import (
 class GlobalSearchTool(BaseSearchTool):
     """全局搜索工具，基于知识图谱和Map-Reduce模式实现跨社区的广泛查询"""
 
-    def __init__(self, level: int = 0):
+    def __init__(self, level: int = None):
         """
         初始化全局搜索工具
         
@@ -27,7 +27,9 @@ class GlobalSearchTool(BaseSearchTool):
             level: 社区层级，默认为0
         """
         # 设置社区层级
-        self.level = level
+        self.level = (
+            level if level is not None else GLOBAL_SEARCH_SETTINGS["default_level"]
+        )
         
         # 调用父类构造函数
         super().__init__(cache_dir="./cache/global_search")
@@ -207,7 +209,7 @@ class GlobalSearchTool(BaseSearchTool):
         返回:
             List[str]: 中间结果列表
         """
-        batch_size = 5  # 每批处理5个社区，提高效率
+        batch_size = GLOBAL_SEARCH_SETTINGS["community_batch_size"]  # 每批处理若干社区，提高效率
         
         results = []
         

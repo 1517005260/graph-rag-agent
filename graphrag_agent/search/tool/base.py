@@ -8,6 +8,7 @@ from graphrag_agent.models.get_models import get_llm_model, get_embeddings_model
 from graphrag_agent.cache_manager.manager import CacheManager, ContextAndKeywordAwareCacheKeyStrategy, MemoryCacheBackend
 from graphrag_agent.config.neo4jdb import get_db_manager
 from graphrag_agent.search.utils import VectorUtils
+from graphrag_agent.config.settings import BASE_SEARCH_CONFIG
 
 
 class BaseSearchTool(ABC):
@@ -23,11 +24,17 @@ class BaseSearchTool(ABC):
         # 初始化大语言模型和嵌入模型
         self.llm = get_llm_model()
         self.embeddings = get_embeddings_model()
+        self.default_vector_limit = BASE_SEARCH_CONFIG["vector_limit"]
+        self.default_text_limit = BASE_SEARCH_CONFIG["text_limit"]
+        self.default_semantic_top_k = BASE_SEARCH_CONFIG["semantic_top_k"]
+        self.default_relevance_top_k = BASE_SEARCH_CONFIG["relevance_top_k"]
         
         # 初始化缓存管理器
         self.cache_manager = CacheManager(
             key_strategy=ContextAndKeywordAwareCacheKeyStrategy(),
-            storage_backend=MemoryCacheBackend(max_size=200),
+            storage_backend=MemoryCacheBackend(
+                max_size=BASE_SEARCH_CONFIG["cache_max_size"]
+            ),
             cache_dir=cache_dir
         )
         
@@ -100,7 +107,7 @@ class BaseSearchTool(ABC):
         """
         pass
 
-    def vector_search(self, query: str, limit: int = 5) -> List[str]:
+    def vector_search(self, query: str, limit: int = None) -> List[str]:
         """
         基于向量相似度的搜索方法
         
@@ -112,6 +119,7 @@ class BaseSearchTool(ABC):
             List[str]: 匹配实体ID列表
         """
         try:
+            limit = limit or self.default_vector_limit
             # 生成查询的嵌入向量
             query_embedding = self.embeddings.embed_query(query)
             
@@ -140,7 +148,7 @@ class BaseSearchTool(ABC):
             # 如果向量搜索失败，尝试使用文本搜索作为备用
             return self.text_search(query, limit)
     
-    def text_search(self, query: str, limit: int = 5) -> List[str]:
+    def text_search(self, query: str, limit: int = None) -> List[str]:
         """
         基于文本匹配的搜索方法（作为向量搜索的备选）
         
@@ -152,6 +160,7 @@ class BaseSearchTool(ABC):
             List[str]: 匹配实体ID列表
         """
         try:
+            limit = limit or self.default_text_limit
             # 构建全文搜索查询
             cypher = """
             MATCH (e:__Entity__)
@@ -174,9 +183,9 @@ class BaseSearchTool(ABC):
             print(f"文本搜索失败: {e}")
             return []
             
-    def semantic_search(self, query: str, entities: List[Dict], 
-                        embedding_field: str = "embedding", 
-                        top_k: int = 5) -> List[Dict]:
+    def semantic_search(self, query: str, entities: List[Dict],
+                        embedding_field: str = "embedding",
+                        top_k: int = None) -> List[Dict]:
         """
         对一组实体进行语义相似度搜索
         
@@ -190,6 +199,7 @@ class BaseSearchTool(ABC):
             按相似度排序的实体列表，每项增加"score"字段表示相似度
         """
         try:
+            top_k = top_k or self.default_semantic_top_k
             # 生成查询的嵌入向量
             query_embedding = self.embeddings.embed_query(query)
             
@@ -204,7 +214,7 @@ class BaseSearchTool(ABC):
             print(f"语义搜索失败: {e}")
             return entities[:top_k] if top_k else entities
     
-    def filter_by_relevance(self, query: str, docs: List, top_k: int = 5) -> List:
+    def filter_by_relevance(self, query: str, docs: List, top_k: int = None) -> List:
         """
         根据相关性过滤文档
         
@@ -218,14 +228,16 @@ class BaseSearchTool(ABC):
         """
         try:
             query_embedding = self.embeddings.embed_query(query)
+            limit = top_k or self.default_relevance_top_k
             return VectorUtils.filter_documents_by_relevance(
                 query_embedding,
                 docs,
-                top_k=top_k
+                top_k=limit
             )
         except Exception as e:
             print(f"文档过滤失败: {e}")
-            return docs[:top_k] if top_k else docs
+            limit = top_k or self.default_relevance_top_k
+            return docs[:limit] if limit else docs
     
     def get_tool(self) -> BaseTool:
         """

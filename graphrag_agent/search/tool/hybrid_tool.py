@@ -9,7 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 from graphrag_agent.config.prompt import LC_SYSTEM_PROMPT
-from graphrag_agent.config.settings import gl_description, response_type
+from graphrag_agent.config.settings import gl_description, response_type, HYBRID_SEARCH_SETTINGS
 from graphrag_agent.search.tool.base import BaseSearchTool
 
 
@@ -22,11 +22,11 @@ class HybridSearchTool(BaseSearchTool):
     def __init__(self):
         """初始化混合搜索工具"""
         # 检索参数
-        self.entity_limit = 15        # 最大检索实体数量
-        self.max_hop_distance = 2     # 最大跳数（关系扩展）
-        self.top_communities = 3      # 检索社区数量
-        self.batch_size = 10          # 批处理大小
-        self.community_level = 0      # 默认社区等级
+        self.entity_limit = HYBRID_SEARCH_SETTINGS["entity_limit"]
+        self.max_hop_distance = HYBRID_SEARCH_SETTINGS["max_hop_distance"]
+        self.top_communities = HYBRID_SEARCH_SETTINGS["top_communities"]
+        self.batch_size = HYBRID_SEARCH_SETTINGS["batch_size"]
+        self.community_level = HYBRID_SEARCH_SETTINGS["community_level"]
         
         # 调用父类构造函数
         super().__init__(cache_dir="./cache/hybrid_search")

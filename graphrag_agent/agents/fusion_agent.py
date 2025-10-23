@@ -2,6 +2,8 @@ import asyncio
 import re
 from typing import Any, AsyncGenerator, Dict, Optional, Tuple
 
+from graphrag_agent.config.settings import AGENT_SETTINGS
+
 from graphrag_agent.agents.multi_agent.integration.legacy_facade import MultiAgentFacade
 
 
@@ -31,15 +33,17 @@ class FusionGraphRAGAgent:
         self._global_cache: Dict[str, str] = {}
         self._session_cache: Dict[str, Dict[str, str]] = {}
         self._last_payload: Dict[str, Any] = {}
+        self._flush_threshold = AGENT_SETTINGS["fusion_stream_flush_threshold"]
+        self._default_recursion_limit = AGENT_SETTINGS["default_recursion_limit"]
 
-    def ask(self, query: str, thread_id: str = "default", recursion_limit: int = 5) -> str:
+    def ask(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None) -> str:
         return self._execute(query, thread_id)[0]
 
-    def ask_with_trace(self, query: str, thread_id: str = "default", recursion_limit: int = 5) -> Dict[str, Any]:
+    def ask_with_trace(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None) -> Dict[str, Any]:
         answer, payload = self._execute(query, thread_id)
         return {"answer": answer, "payload": payload}
 
-    async def ask_stream(self, query: str, thread_id: str = "default", recursion_limit: int = 5) -> AsyncGenerator[str, None]:
+    async def ask_stream(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None) -> AsyncGenerator[str, None]:
         cached = self._read_cache(query, thread_id)
         if cached is None:
             cached, _ = await asyncio.to_thread(self._execute, query, thread_id)
@@ -76,12 +80,11 @@ class FusionGraphRAGAgent:
             return answer.strip()
         return "未能生成回答" if answer is None else str(answer)
 
-    @staticmethod
-    async def _stream_chunks(answer: str) -> AsyncGenerator[str, None]:
+    async def _stream_chunks(self, answer: str) -> AsyncGenerator[str, None]:
         buffer = ""
         for idx, part in enumerate(re.split(r"([。！？.!?]\s*)", answer)):
             buffer += part
-            if (idx % 2 and buffer.strip()) or len(buffer) >= 60:
+            if (idx % 2 and buffer.strip()) or len(buffer) >= self._flush_threshold:
                 yield buffer
                 buffer = ""
                 await asyncio.sleep(0)

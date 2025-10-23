@@ -1,29 +1,34 @@
-import os
 import time
 from graphdatascience import GraphDataScience
 from typing import Tuple, List, Any, Dict
 from dataclasses import dataclass
 
-from graphrag_agent.config.settings import similarity_threshold, BATCH_SIZE, GDS_MEMORY_LIMIT
+from graphrag_agent.config.settings import (
+    similarity_threshold,
+    BATCH_SIZE,
+    GDS_MEMORY_LIMIT,
+    NEO4J_CONFIG,
+    SIMILAR_ENTITY_SETTINGS,
+)
 from graphrag_agent.graph.core import connection_manager, timer, get_performance_stats, print_performance_stats
 
 @dataclass
 class GDSConfig:
     """Neo4j GDS配置参数"""
-    uri: str = os.environ["NEO4J_URI"]
-    username: str = os.environ["NEO4J_USERNAME"]
-    password: str = os.environ["NEO4J_PASSWORD"]
+    uri: str = NEO4J_CONFIG["uri"]
+    username: str = NEO4J_CONFIG["username"]
+    password: str = NEO4J_CONFIG["password"]
     similarity_threshold: float = similarity_threshold
-    word_edit_distance: int = 3
-    batch_size: int = 500
-    memory_limit: int = 6  # 单位：GB
+    word_edit_distance: int = SIMILAR_ENTITY_SETTINGS["word_edit_distance"]
+    batch_size: int = SIMILAR_ENTITY_SETTINGS["batch_size"]
+    memory_limit: int = SIMILAR_ENTITY_SETTINGS["memory_limit"]  # 单位：GB
+    top_k: int = SIMILAR_ENTITY_SETTINGS["top_k"]
     
     def __post_init__(self):
         # 如果配置文件中有设置则使用配置值
-        if 'BATCH_SIZE' in globals() and BATCH_SIZE:
+        if BATCH_SIZE:
             self.batch_size = BATCH_SIZE
-            
-        if 'GDS_MEMORY_LIMIT' in globals() and GDS_MEMORY_LIMIT:
+        if GDS_MEMORY_LIMIT:
             self.memory_limit = GDS_MEMORY_LIMIT
 
 class SimilarEntityDetector:
@@ -159,6 +164,7 @@ class SimilarEntityDetector:
         print("开始检测相似实体...")
         
         try:
+            top_k = max(1, self.config.top_k)
             # 使用KNN算法找出相似实体
             mutate_result = self.gds.knn.mutate(
                 self.G,
@@ -166,7 +172,7 @@ class SimilarEntityDetector:
                 mutateRelationshipType='SIMILAR',
                 mutateProperty='score',
                 similarityCutoff=self.config.similarity_threshold,
-                topK=10
+                topK=top_k
             )
             
             # 将KNN结果写入数据库
@@ -176,7 +182,7 @@ class SimilarEntityDetector:
                 writeRelationshipType='SIMILAR',
                 writeProperty='score',
                 similarityCutoff=self.config.similarity_threshold,
-                topK=10
+                topK=top_k
             )
             
             self.knn_time = time.time() - start_time
@@ -193,12 +199,13 @@ class SimilarEntityDetector:
             # 尝试使用备用参数
             try:
                 print("尝试使用备用参数重新执行KNN...")
+                fallback_top_k = max(1, top_k // 2)
                 fallback_params = {
                     "nodeProperties": ["embedding"],
                     "writeRelationshipType": "SIMILAR",
                     "writeProperty": "score",
                     "similarityCutoff": self.config.similarity_threshold,
-                    "topK": 5,  # 降低topK值
+                    "topK": fallback_top_k,
                     "sampleRate": 0.5  # 降低采样率
                 }
                 

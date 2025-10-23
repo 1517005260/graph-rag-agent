@@ -331,6 +331,8 @@ DEBUG - LLM关键词结果: {
    - 解决语义相近但概念不同的术语区分问题
    - 优化如"优秀学生"vs"国家奖学金"、"过失杀人"vs"故意杀人"等的嵌入区分
 
+4. 引入多模态rag等功能
+
 ## 🙏 参考与致谢
 
 - [GraphRAG](https://github.com/microsoft/graphrag) – 微软开源的知识图谱增强 RAG 框架  

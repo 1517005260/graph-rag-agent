@@ -2,8 +2,8 @@ import uvicorn
 from fastapi import FastAPI
 from routers import api_router
 from server_config.database import get_db_manager
+from server_config.settings import UVICORN_CONFIG
 from services.agent_service import agent_manager
-from graphrag_agent.config.settings import workers
 
 # 初始化 FastAPI 应用
 app = FastAPI(title="知识图谱问答系统", description="基于知识图谱的智能问答系统后端API")
@@ -30,4 +30,4 @@ def shutdown_event():
 
 # 启动服务器
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, workers=workers)
+    uvicorn.run("main:app", **UVICORN_CONFIG)
