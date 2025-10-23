@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional, Iterable, Tuple
 import hashlib
 import json
 import logging
-import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from pydantic import BaseModel, Field
 
@@ -447,20 +447,41 @@ class BaseReporter:
         if not evidence_batches:
             return []
 
-        if self.config.enable_parallel_map:
+        if (
+            self.config.enable_parallel_map
+            and len(evidence_batches) > 1
+        ):
+            max_workers = min(len(evidence_batches), 4)
             try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-            if loop and loop.is_running():
-                _LOGGER.debug("检测到事件循环正在运行，Map阶段退化为串行执行")
-            else:
-                return asyncio.run(
-                    self._evidence_mapper.map_parallel(
-                        evidence_batches,
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    future_map = {
+                        executor.submit(
+                            self._evidence_mapper.map_evidence_batch,
+                            batch,
+                            section,
+                            batch_index=index,
+                        ): index
+                        for index, batch in enumerate(evidence_batches)
+                    }
+                    results: List[Optional[EvidenceSummary]] = [None] * len(evidence_batches)
+                    for future in as_completed(future_map):
+                        idx = future_map[future]
+                        try:
+                            results[idx] = future.result()
+                        except Exception as exc:  # noqa: BLE001
+                            _LOGGER.warning("并行证据映射失败，索引%d: %s", idx, exc)
+                            results[idx] = None
+
+                fallback_indices = [idx for idx, res in enumerate(results) if res is None]
+                for idx in fallback_indices:
+                    results[idx] = self._evidence_mapper.map_evidence_batch(
+                        evidence_batches[idx],
                         section,
+                        batch_index=idx,
                     )
-                )
+                return [res for res in results if res is not None]
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.debug("并行Map阶段异常，改为串行执行: %s", exc)
 
         return [
             self._evidence_mapper.map_evidence_batch(

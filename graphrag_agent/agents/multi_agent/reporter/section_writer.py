@@ -6,6 +6,7 @@
 from typing import List, Dict, Any, Optional, Iterable
 import logging
 import textwrap
+import json
 
 from pydantic import BaseModel, Field
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -87,12 +88,11 @@ class SectionWriter:
         batches = self._split_into_batches(evidence_entries, self.config.max_evidence_per_call)
         contents: List[str] = []
         used_ids: List[str] = []
+        outline_context = self._build_outline_snapshot(outline, section)
+        outline_context_text = json.dumps(outline_context, ensure_ascii=False)
 
         for batch_index, batch in enumerate(batches, start=1):
             evidence_list_text = self._format_evidence(batch)
-            # Pydantic v1 使用 json(), v2 使用 model_dump_json()，但参数名不同
-            import json
-            outline_json = json.dumps(outline.model_dump(mode="json"), ensure_ascii=False)
             context_instruction = ""
 
             if self.config.enable_multi_pass and len(batches) > 1:
@@ -104,7 +104,7 @@ class SectionWriter:
                 ).strip()
 
             prompt = SECTION_WRITE_PROMPT.format(
-                outline=outline_json,
+                outline=outline_context_text,
                 section_id=section.section_id,
                 section_title=section.title,
                 section_summary=section.summary,
@@ -181,3 +181,38 @@ class SectionWriter:
         message: BaseMessage = self._llm.invoke(prompt)  # type: ignore[assignment]
         content = getattr(message, "content", None) or str(message)
         return content.strip()
+
+    def _build_outline_snapshot(
+        self,
+        outline: ReportOutline,
+        section: SectionOutline,
+    ) -> Dict[str, Any]:
+        """
+        构造精简的纲要上下文，减少提示长度但保留章节位置信息。
+        """
+        try:
+            index = next(
+                idx for idx, item in enumerate(outline.sections) if item.section_id == section.section_id
+            )
+        except StopIteration:
+            index = 0
+
+        previous_title = outline.sections[index - 1].title if index > 0 else None
+        next_title = (
+            outline.sections[index + 1].title if index + 1 < len(outline.sections) else None
+        )
+
+        snapshot: Dict[str, Any] = {
+            "report_title": outline.title,
+            "report_type": outline.report_type,
+            "section_index": index + 1,
+            "total_sections": len(outline.sections),
+            "section_titles": [item.title for item in outline.sections],
+        }
+        if outline.abstract:
+            snapshot["abstract"] = outline.abstract[:400]
+        if previous_title:
+            snapshot["previous_section"] = previous_title
+        if next_title:
+            snapshot["next_section"] = next_title
+        return snapshot

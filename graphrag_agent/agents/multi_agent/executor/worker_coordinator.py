@@ -71,10 +71,31 @@ class WorkerCoordinator:
                 _LOGGER.warning("计划信号中包含未知任务: %s", task_id)
                 continue
 
+            dependency_ok, dependency_error, failure_reason = self._check_dependencies(task, state)
+            if not dependency_ok:
+                _LOGGER.error(
+                    "任务依赖未满足，跳过执行: task_id=%s reason=%s",
+                    task.task_id,
+                    dependency_error,
+                )
+                failure_record = self._create_failure_record(
+                    state,
+                    task,
+                    dependency_error or "依赖未满足",
+                    failure_reason=failure_reason,
+                )
+                results.append(failure_record)
+                continue
+
             executor = self._select_executor(task.task_type)
             if executor is None:
                 _LOGGER.error("未找到匹配的执行器: task_id=%s type=%s", task_id, task.task_type)
-                failure_record = self._create_failure_record(state, task, f"未找到任务类型 {task.task_type} 对应的执行器")
+                failure_record = self._create_failure_record(
+                    state,
+                    task,
+                    f"未找到任务类型 {task.task_type} 对应的执行器",
+                    failure_reason="executor_not_found",
+                )
                 results.append(failure_record)
                 continue
 
@@ -115,6 +136,8 @@ class WorkerCoordinator:
         state: PlanExecuteState,
         task: TaskNode,
         error: str,
+        *,
+        failure_reason: str = "unknown",
     ) -> ExecutionRecord:
         """
         当无可用执行器时创建失败记录，并更新状态。
@@ -124,7 +147,7 @@ class WorkerCoordinator:
             latency_seconds=0.0,
             tool_calls_count=0,
             evidence_count=0,
-            environment={"reason": "executor_not_found"},
+            environment={"reason": failure_reason},
         )
 
         record = ExecutionRecord(
@@ -145,6 +168,7 @@ class WorkerCoordinator:
                     "task_id": task.task_id,
                     "error": error,
                     "worker_type": "worker_coordinator",
+                    "reason": failure_reason,
                 }
             )
 
@@ -154,3 +178,70 @@ class WorkerCoordinator:
             state.plan.update_task_status(task.task_id, "failed")
 
         return record
+
+    def _check_dependencies(
+        self,
+        task: TaskNode,
+        state: PlanExecuteState,
+    ) -> tuple[bool, Optional[str], str]:
+        """
+        检查任务依赖是否满足。
+
+        返回 (是否可执行, 错误信息, 失败原因标签)。
+        """
+        if not task.depends_on:
+            return True, None, "none"
+
+        plan = state.plan
+        status_map: Dict[str, str] = {}
+        if plan is not None:
+            status_map = {node.task_id: node.status for node in plan.task_graph.nodes}
+
+        exec_context = state.execution_context
+        completed_ids = set(exec_context.completed_task_ids if exec_context else [])
+
+        failed_dependencies = []
+        pending_dependencies = []
+        missing_dependencies = []
+
+        for dep_id in task.depends_on:
+            status = status_map.get(dep_id)
+            if status == "failed":
+                failed_dependencies.append(dep_id)
+            elif status == "completed" or dep_id in completed_ids:
+                continue
+            elif status is None:
+                missing_dependencies.append(dep_id)
+            else:
+                pending_dependencies.append(dep_id)
+
+        if failed_dependencies:
+            return (
+                False,
+                f"依赖任务失败: {', '.join(failed_dependencies)}",
+                "dependency_failed",
+            )
+
+        if missing_dependencies:
+            return (
+                False,
+                f"依赖任务缺失: {', '.join(missing_dependencies)}",
+                "dependency_missing",
+            )
+
+        if pending_dependencies:
+            return (
+                False,
+                f"依赖任务未完成: {', '.join(pending_dependencies)}",
+                "dependency_unfinished",
+            )
+
+        if not all(dep in completed_ids for dep in task.depends_on):
+            remaining = [dep for dep in task.depends_on if dep not in completed_ids]
+            return (
+                False,
+                f"依赖任务尚未标记完成: {', '.join(remaining)}",
+                "dependency_unfinished",
+            )
+
+        return True, None, "ready"
