@@ -4,6 +4,7 @@ Planner编排基类
 整合Clarifier、TaskDecomposer、PlanReviewer，输出结构化的PlanSpec
 """
 from typing import Optional, List
+from datetime import datetime
 import logging
 
 from pydantic import BaseModel, Field
@@ -30,6 +31,11 @@ from graphrag_agent.agents.multi_agent.planner.plan_reviewer import (
     PlanReviewOutcome,
 )
 from graphrag_agent.models.get_models import get_llm_model
+from graphrag_agent.config.settings import (
+    MULTI_AGENT_PLANNER_MAX_TASKS,
+    MULTI_AGENT_ALLOW_UNCLARIFIED_PLAN,
+    MULTI_AGENT_DEFAULT_DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -101,7 +107,13 @@ class BasePlanner:
         task_decomposer: Optional[TaskDecomposer] = None,
         plan_reviewer: Optional[PlanReviewer] = None,
     ) -> None:
-        self.config = config or PlannerConfig()
+        if config is None:
+            config = PlannerConfig(
+                max_tasks=MULTI_AGENT_PLANNER_MAX_TASKS,
+                allow_unclarified_plan=MULTI_AGENT_ALLOW_UNCLARIFIED_PLAN,
+                default_domain=MULTI_AGENT_DEFAULT_DOMAIN,
+            )
+        self.config = config
         self._llm = llm or get_llm_model()
 
         # 所有子组件共享同一个LLM实例，便于缓存与限流
@@ -131,6 +143,7 @@ class BasePlanner:
         # Step 1: 澄清分析
         clarification = self._clarifier.analyze(context)
         _LOGGER.info("Clarification result: %s", clarification.model_dump())
+        self._record_clarification(context, clarification)
 
         if not clarification.is_satisfied(context) and not self.config.allow_unclarified_plan:
             _LOGGER.info("澄清问题尚未全部回答，暂停计划生成")
@@ -185,3 +198,24 @@ class BasePlanner:
             # 若尚未有澄清后的查询，则默认等同于原始查询
             context.refined_query = context.original_query
         return context
+
+    def _record_clarification(self, context: PlanContext, clarification: ClarificationResult) -> None:
+        """
+        将澄清问题写入上下文，便于后续记录与测试观察。
+        """
+        if not clarification.questions:
+            return
+        existing = {entry.get("question") for entry in context.clarification_history}
+        timestamp = datetime.now().isoformat()
+        for question in clarification.questions:
+            if question in existing:
+                continue
+            context.clarification_history.append(
+                {
+                    "question": question,
+                    "answer": None,
+                    "asked_at": timestamp,
+                }
+            )
+        if clarification.ambiguity_types:
+            context.user_preferences.setdefault("ambiguity_types", clarification.ambiguity_types)

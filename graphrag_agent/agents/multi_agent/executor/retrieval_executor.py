@@ -229,8 +229,9 @@ class RetrievalExecutor(BaseExecutor):
             tool_result_payload: Dict[str, Any] = {}
             if record.tool_calls and isinstance(record.tool_calls[0].result, dict):
                 tool_result_payload = record.tool_calls[0].result  # type: ignore[assignment]
+            answer_text = self._extract_answer_text(tool_result_payload, record)
             exec_context.intermediate_results[task.task_id] = {
-                "answer": tool_result_payload.get("answer"),
+                "answer": answer_text,
                 "raw_result": tool_result_payload,
                 "metadata": record.metadata.model_dump(),
             }
@@ -247,3 +248,51 @@ class RetrievalExecutor(BaseExecutor):
 
         if state.plan is not None:
             state.plan.update_task_status(task.task_id, "completed" if success else "failed")
+
+    @staticmethod
+    def _extract_from_dict(payload: Dict[str, Any]) -> Optional[str]:
+        """
+        从结构化Payload中提取可能的回答文本。
+        """
+        candidate_keys = (
+            "answer",
+            "final_answer",
+            "final_report",
+            "response",
+            "summary",
+            "output",
+        )
+        for key in candidate_keys:
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        report_block = payload.get("report")
+        if isinstance(report_block, dict):
+            report_answer = report_block.get("final_report") or report_block.get("summary")
+            if isinstance(report_answer, str) and report_answer.strip():
+                return report_answer.strip()
+        return None
+
+    def _extract_answer_text(
+        self,
+        payload: Dict[str, Any],
+        record: ExecutionRecord,
+    ) -> Optional[str]:
+        """
+        综合多源数据提取用于后续反思的答案文本。
+        """
+        if payload:
+            candidate = self._extract_from_dict(payload)
+            if candidate:
+                return candidate
+
+        for call in record.tool_calls:
+            result = call.result
+            if isinstance(result, dict):
+                candidate = self._extract_from_dict(result)
+                if candidate:
+                    return candidate
+            elif isinstance(result, str) and result.strip():
+                return result.strip()
+
+        return None

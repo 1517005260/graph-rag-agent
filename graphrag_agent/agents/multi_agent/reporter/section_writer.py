@@ -91,6 +91,22 @@ class SectionWriter:
         outline_context = self._build_outline_snapshot(outline, section)
         outline_context_text = json.dumps(outline_context, ensure_ascii=False)
 
+        if not evidence_entries:
+            placeholder = (
+                f"⚠️ 当前章节《{section.title}》未检索到可引用的证据。"
+                " 请补充检索或调整查询后重试。"
+            )
+            _LOGGER.warning(
+                "No evidence available for section_id=%s title=%s",
+                section.section_id,
+                section.title,
+            )
+            return SectionDraft(
+                section_id=section.section_id,
+                content=placeholder,
+                used_evidence_ids=[],
+            )
+
         for batch_index, batch in enumerate(batches, start=1):
             evidence_list_text = self._format_evidence(batch)
             context_instruction = ""

@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 class AnswerValidator:
     """
@@ -22,7 +22,12 @@ class AnswerValidator:
             "对不起，我不能"
         ]
     
-    def validate(self, query: str, answer: str) -> Dict[str, bool]:
+    def validate(
+        self,
+        query: str,
+        answer: str,
+        reference_keywords: Optional[Dict[str, List[str]]] = None,
+    ) -> Dict[str, bool]:
         """
         验证生成答案的质量
         
@@ -49,14 +54,24 @@ class AnswerValidator:
                     break
         
         # 关键词相关性检查
-        results["keyword_relevance"] = self._check_keyword_relevance(query, answer)
+        results["keyword_relevance"] = self._check_keyword_relevance(
+            query,
+            answer,
+            reference_keywords=reference_keywords,
+        )
         
         # 总体通过验证
         results["passed"] = all(results.values())
         
         return results
     
-    def _check_keyword_relevance(self, query: str, answer: str) -> bool:
+    def _check_keyword_relevance(
+        self,
+        query: str,
+        answer: str,
+        *,
+        reference_keywords: Optional[Dict[str, List[str]]] = None,
+    ) -> bool:
         """
         检查答案是否包含查询的关键词
         
@@ -67,34 +82,80 @@ class AnswerValidator:
         返回:
             bool: 是否满足关键词相关性要求
         """
-        # 如果没有关键词提取器，则默认通过
-        if not self.keyword_extractor:
-            return True
-            
-        # 提取关键词
-        keywords = self.keyword_extractor(query)
+        keywords: Optional[Dict[str, List[str]]] = reference_keywords
+        if keywords is None:
+            if not self.keyword_extractor:
+                return True
+            keywords = self.keyword_extractor(query)
         if not keywords:
             return True
-            
-        high_level_keywords = keywords.get("high_level", [])
-        low_level_keywords = keywords.get("low_level", [])
+        high_level_keywords, low_level_keywords = self._normalize_keywords(keywords)
         
         # 至少有一个高级关键词应该在答案中出现
         if high_level_keywords:
-            keyword_found = any(keyword.lower() in answer.lower() for keyword in high_level_keywords)
+            answer_lower = answer.lower()
+            keyword_found = any(
+                (keyword if self._contains_chinese(keyword) else keyword.lower())
+                in (answer if self._contains_chinese(keyword) else answer_lower)
+                for keyword in high_level_keywords
+            )
             if not keyword_found:
                 print(f"[验证] 答案未包含任何高级关键词: {high_level_keywords}")
                 return False
                 
         # 至少有一半的低级关键词应该在答案中出现
-        if low_level_keywords and len(low_level_keywords) > 1:
-            matches = sum(1 for keyword in low_level_keywords if keyword.lower() in answer.lower())
-            if matches < len(low_level_keywords) / 2:
+        if low_level_keywords:
+            answer_lower = answer.lower()
+            matches = sum(
+                1
+                for keyword in low_level_keywords
+                if (keyword if self._contains_chinese(keyword) else keyword.lower())
+                in (answer if self._contains_chinese(keyword) else answer_lower)
+            )
+            required = max(1, len(low_level_keywords) // 2)
+            if matches < required:
                 print(f"[验证] 答案未包含足够的低级关键词: {matches}/{len(low_level_keywords)}")
                 return False
         
         print("[验证] 答案通过关键词相关性检查")
         return True
+
+    @staticmethod
+    def _contains_chinese(token: str) -> bool:
+        return any("\u4e00" <= ch <= "\u9fff" for ch in token)
+
+    def _normalize_keywords(
+        self,
+        keywords: Dict[str, List[str]],
+    ) -> tuple[List[str], List[str]]:
+        high: List[str] = []
+        low: List[str] = []
+
+        if "high_level" in keywords or "low_level" in keywords:
+            high = [self._normalize_token(token) for token in keywords.get("high_level", []) if token]
+            low = [self._normalize_token(token) for token in keywords.get("low_level", []) if token]
+        else:
+            candidates = [self._normalize_token(token) for token in keywords.get("keywords", []) if token]
+            high = candidates
+        return self._deduplicate(high), self._deduplicate(low)
+
+    def _normalize_token(self, token: str) -> str:
+        token = str(token).strip()
+        if not token:
+            return ""
+        if self._contains_chinese(token):
+            return token
+        return token.lower()
+
+    @staticmethod
+    def _deduplicate(tokens: List[str]) -> List[str]:
+        seen = set()
+        result: List[str] = []
+        for token in tokens:
+            if token and token not in seen:
+                seen.add(token)
+                result.append(token)
+        return result
 
 def complexity_estimate(query: str) -> float:
     """
@@ -147,3 +208,4 @@ def complexity_estimate(query: str) -> float:
     except Exception as e:
         print(f"计算查询复杂度时出错: {e}")
         return 0.5  # 出错时返回默认值
+

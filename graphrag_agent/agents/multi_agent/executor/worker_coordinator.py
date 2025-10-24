@@ -15,10 +15,17 @@ from graphrag_agent.agents.multi_agent.core.plan_spec import (
     TaskNode,
 )
 from graphrag_agent.agents.multi_agent.core.state import PlanExecuteState
-from graphrag_agent.agents.multi_agent.executor.base_executor import BaseExecutor
+from graphrag_agent.agents.multi_agent.executor.base_executor import (
+    BaseExecutor,
+    TaskExecutionResult,
+)
 from graphrag_agent.agents.multi_agent.executor.research_executor import ResearchExecutor
 from graphrag_agent.agents.multi_agent.executor.retrieval_executor import RetrievalExecutor
 from graphrag_agent.agents.multi_agent.executor.reflector import ReflectionExecutor
+from graphrag_agent.config.settings import (
+    MULTI_AGENT_REFLECTION_ALLOW_RETRY,
+    MULTI_AGENT_REFLECTION_MAX_RETRIES,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -104,6 +111,22 @@ class WorkerCoordinator:
 
             exec_result = executor.execute_task(task, state, signal)
             results.append(exec_result.record)
+
+            if (
+                task.task_type == "reflection"
+                and MULTI_AGENT_REFLECTION_ALLOW_RETRY
+            ):
+                retry_result = self._handle_reflection_retry(
+                    task=task,
+                    initial_result=exec_result,
+                    state=state,
+                    signal=signal,
+                    task_map=task_map,
+                    executor=executor,
+                    results=results,
+                )
+                if retry_result is not None:
+                    exec_result = retry_result
 
         if state.plan is not None:
             node_status = [node.status for node in state.plan.task_graph.nodes]
@@ -245,3 +268,101 @@ class WorkerCoordinator:
             )
 
         return True, None, "ready"
+
+    def _handle_reflection_retry(
+        self,
+        *,
+        task: TaskNode,
+        initial_result: TaskExecutionResult,
+        state: PlanExecuteState,
+        signal: PlanExecutionSignal,
+        task_map: Dict[str, TaskNode],
+        executor: BaseExecutor,
+        results: List[ExecutionRecord],
+    ) -> Optional[TaskExecutionResult]:
+        """
+        处理反思任务的自动重试逻辑，必要时重新执行目标任务并再次运行反思。
+        """
+        reflection = getattr(initial_result.record, "reflection", None)  # type: ignore[attr-defined]
+        if reflection is None or not reflection.needs_retry:
+            return None
+
+        exec_context = state.execution_context
+        if exec_context is None:
+            return None
+
+        target_task_id = initial_result.record.metadata.environment.get("target_task_id")
+        if not target_task_id:
+            _LOGGER.warning(
+                "反思任务缺失 target_task_id，无法执行重试: task_id=%s",
+                task.task_id,
+            )
+            return None
+
+        final_result: Optional[TaskExecutionResult] = None
+        retry_counts = exec_context.reflection_retry_counts
+
+        while (
+            reflection is not None
+            and reflection.needs_retry
+            and retry_counts.get(target_task_id, 0)
+            < MULTI_AGENT_REFLECTION_MAX_RETRIES
+        ):
+            attempt_index = retry_counts.get(target_task_id, 0) + 1
+            retry_counts[target_task_id] = attempt_index
+
+            target_task = task_map.get(target_task_id)
+            if target_task is None:
+                _LOGGER.warning(
+                    "无法找到反思重试的目标任务: target_task_id=%s",
+                    target_task_id,
+                )
+                break
+
+            target_executor = self._select_executor(target_task.task_type)
+            if target_executor is None:
+                _LOGGER.warning(
+                    "缺少处理目标任务的执行器，终止反思重试: task_type=%s",
+                    target_task.task_type,
+                )
+                break
+
+            _LOGGER.info(
+                "触发反思重试: target_task_id=%s attempt=%s/%s",
+                target_task_id,
+                attempt_index,
+                MULTI_AGENT_REFLECTION_MAX_RETRIES,
+            )
+            if state.plan is not None:
+                state.plan.update_task_status(target_task_id, "running")
+            retry_result = target_executor.execute_task(target_task, state, signal)
+            results.append(retry_result.record)
+
+            if not retry_result.success:
+                _LOGGER.warning(
+                    "目标任务重试失败，终止后续反思: target_task_id=%s",
+                    target_task_id,
+                )
+                break
+
+            if state.plan is not None:
+                state.plan.update_task_status(task.task_id, "running")
+            updated_result = executor.execute_task(task, state, signal)
+            results.append(updated_result.record)
+            final_result = updated_result
+            reflection = getattr(updated_result.record, "reflection", None)
+
+        if (
+            reflection is not None
+            and reflection.needs_retry
+            and retry_counts.get(target_task_id, 0)
+            >= MULTI_AGENT_REFLECTION_MAX_RETRIES
+        ):
+            _LOGGER.info(
+                "反思重试已达上限，仍未通过验证: target_task_id=%s",
+                target_task_id,
+            )
+
+        if final_result is None:
+            return None
+        return final_result

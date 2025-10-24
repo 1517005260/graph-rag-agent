@@ -12,6 +12,8 @@ import uuid
 from pydantic import BaseModel, Field
 from langchain_core.messages import BaseMessage
 
+from graphrag_agent.config.settings import MULTI_AGENT_DEFAULT_REPORT_TYPE
+
 
 class PlanContext(BaseModel):
     """
@@ -76,6 +78,10 @@ class ExecutionContext(BaseModel):
         default_factory=dict,
         description="任务间依赖传递的中间结果，格式: {task_id: result}"
     )
+    reflection_retry_counts: Dict[str, int] = Field(
+        default_factory=dict,
+        description="反思触发的目标任务重试计数"
+    )
 
     # 执行错误记录
     errors: List[Dict[str, Any]] = Field(
@@ -131,7 +137,7 @@ class ReportContext(BaseModel):
 
     # 报告类型（短回答或长文档）
     report_type: str = Field(
-        default="short_answer",
+        default=MULTI_AGENT_DEFAULT_REPORT_TYPE,
         description="报告类型: short_answer(短回答) | long_document(长文档)"
     )
 
@@ -231,7 +237,9 @@ class PlanExecuteState(BaseModel):
         elif self.execution_context.evidence_registry is None:
             self.execution_context.evidence_registry = {}
         if self.report_context is None:
-            self.report_context = ReportContext()
+            self.report_context = ReportContext(report_type=MULTI_AGENT_DEFAULT_REPORT_TYPE)
+        elif not self.report_context.report_type:
+            self.report_context.report_type = MULTI_AGENT_DEFAULT_REPORT_TYPE
 
     def to_legacy_state(self) -> Dict[str, Any]:
         """

@@ -39,6 +39,16 @@ from graphrag_agent.agents.multi_agent.reporter.mapreduce import (
 )
 from graphrag_agent.agents.multi_agent.tools.evidence_tracker import EvidenceTracker
 from graphrag_agent.cache_manager.manager import CacheManager
+from graphrag_agent.config.settings import (
+    MULTI_AGENT_DEFAULT_REPORT_TYPE,
+    MULTI_AGENT_ENABLE_CONSISTENCY_CHECK,
+    MULTI_AGENT_ENABLE_MAPREDUCE,
+    MULTI_AGENT_MAPREDUCE_THRESHOLD,
+    MULTI_AGENT_MAX_TOKENS_PER_REDUCE,
+    MULTI_AGENT_ENABLE_PARALLEL_MAP,
+    MULTI_AGENT_SECTION_MAX_EVIDENCE,
+    MULTI_AGENT_SECTION_MAX_CONTEXT_CHARS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -98,7 +108,21 @@ class BaseReporter:
         section_reducer: Optional[SectionReducer] = None,
         report_assembler: Optional[ReportAssembler] = None,
     ) -> None:
-        self.config = config or ReporterConfig()
+        if config is None:
+            section_writer_config = SectionWriterConfig(
+                max_evidence_per_call=MULTI_AGENT_SECTION_MAX_EVIDENCE,
+                max_previous_context_chars=MULTI_AGENT_SECTION_MAX_CONTEXT_CHARS,
+            )
+            config = ReporterConfig(
+                default_report_type=MULTI_AGENT_DEFAULT_REPORT_TYPE,
+                enable_consistency_check=MULTI_AGENT_ENABLE_CONSISTENCY_CHECK,
+                enable_mapreduce=MULTI_AGENT_ENABLE_MAPREDUCE,
+                mapreduce_evidence_threshold=MULTI_AGENT_MAPREDUCE_THRESHOLD,
+                max_tokens_per_reduce=MULTI_AGENT_MAX_TOKENS_PER_REDUCE,
+                enable_parallel_map=MULTI_AGENT_ENABLE_PARALLEL_MAP,
+                section_writer=section_writer_config,
+            )
+        self.config = config
         self._outline_builder = outline_builder or OutlineBuilder()
         self._section_writer = section_writer or SectionWriter(config=self.config.section_writer)
         self._consistency_checker = consistency_checker or ConsistencyChecker()

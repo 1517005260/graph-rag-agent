@@ -4,7 +4,7 @@
 负责串联 Planner → WorkerCoordinator → Reporter，形成完整的
 Plan-Execute-Report 生命周期。
 """
-from typing import List, Optional, Sequence, Literal
+from typing import List, Optional, Sequence, Literal, Dict, Any
 import logging
 import time
 import json
@@ -182,6 +182,7 @@ class MultiAgentOrchestrator:
                 errors.append(f"执行阶段失败: {exc}")
             finally:
                 metrics.execution_seconds = time.perf_counter() - exec_start
+        self._print_execution_summary(execution_records, state)
 
         # --- Report ---
         report_result: Optional[ReportResult] = None
@@ -192,6 +193,8 @@ class MultiAgentOrchestrator:
                     state,
                     report_type=report_type,
                 )
+                if report_result is not None:
+                    self._print_report_summary(report_result)
             except Exception as exc:  # noqa: BLE001
                 _LOGGER.exception("报告生成失败: %s", exc)
                 errors.append(f"报告生成失败: {exc}")
@@ -250,3 +253,113 @@ class MultiAgentOrchestrator:
             _LOGGER.error("计划摘要序列化失败: %s", exc)
             return
         print(f"[PlanSpec] 规划结果:\n{encoded}")
+
+    def _print_execution_summary(
+        self,
+        execution_records: Sequence[ExecutionRecord],
+        state: PlanExecuteState,
+    ) -> None:
+        """
+        将执行阶段的核心指标打印为JSON，方便本地调试。
+        """
+        if not execution_records:
+            print("[Execute] 未执行任务。")
+            return
+
+        task_status: Dict[str, str] = {}
+        if state.plan is not None:
+            task_status = {
+                node.task_id: node.status for node in state.plan.task_graph.nodes
+            }
+
+        summary: List[Dict[str, Any]] = []
+        for record in execution_records:
+            env_payload = dict(getattr(record.metadata, "environment", {}) or {})
+            error_messages = [
+                call.error for call in record.tool_calls if getattr(call, "error", None)
+            ]
+            record_summary: Dict[str, Any] = {
+                "task_id": record.task_id,
+                "worker": record.worker_type,
+                "status": task_status.get(record.task_id, "unknown"),
+                "tool_calls": [call.tool_name for call in record.tool_calls],
+                "evidence_count": len(record.evidence),
+                "latency_seconds": round(record.metadata.latency_seconds, 3),
+            }
+            if error_messages:
+                record_summary["errors"] = error_messages
+                record_summary["error"] = error_messages[0]
+
+            failure_reason = env_payload.get("reason") or env_payload.get("failure_reason")
+            if failure_reason:
+                record_summary["failure_reason"] = failure_reason
+            if env_payload.get("target_task_id"):
+                record_summary["target_task_id"] = env_payload["target_task_id"]
+            if env_payload.get("validation_passed") is not None:
+                record_summary["validation_passed"] = env_payload["validation_passed"]
+
+            if record.reflection is not None:
+                reflection_block: Dict[str, Any] = {
+                    "success": record.reflection.success,
+                    "needs_retry": record.reflection.needs_retry,
+                    "reasoning": record.reflection.reasoning,
+                }
+                if record.reflection.suggestions:
+                    reflection_block["suggestions"] = record.reflection.suggestions
+                record_summary["reflection"] = reflection_block
+
+            summary.append(record_summary)
+
+        try:
+            print("[Execute] 执行结果:")
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.error("执行摘要序列化失败: %s", exc)
+
+        exec_context = state.execution_context
+        if exec_context is not None and exec_context.errors:
+            # 打印执行阶段积累的节点错误，便于快速定位失败原因
+            try:
+                print("[Execute] 节点错误详情:")
+                print(json.dumps(exec_context.errors, ensure_ascii=False, indent=2))
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.error("节点错误详情序列化失败: %s", exc)
+
+    def _print_report_summary(self, report_result: ReportResult) -> None:
+        """
+        打印Reporter阶段的摘要信息。
+        """
+        sections = [
+            {
+                "section_id": section.section_id,
+                "title": section.title,
+                "word_count": len(section.content),
+            }
+            for section in report_result.sections
+        ]
+        payload: Dict[str, Any] = {
+            "report_type": report_result.outline.report_type,
+            "title": report_result.outline.title,
+            "section_count": len(report_result.sections),
+            "sections": sections,
+            "has_references": bool(report_result.references),
+        }
+        if report_result.consistency_check is not None:
+            check = report_result.consistency_check
+            issues = check.issues
+            corrections = check.corrections
+            if issues and len(issues) > 5:
+                # 控制台输出保留前5个问题，其余问题仍可在payload中查看完整结果
+                issues = issues[:5] + [{"info": f"其余 {len(check.issues) - 5} 项已省略，可在payload中查看完整结果"}]
+            if corrections and len(corrections) > 5:
+                corrections = corrections[:5] + [{"info": f"其余 {len(check.corrections) - 5} 项已省略，可在payload中查看完整结果"}]
+            payload["consistency_check"] = {
+                "is_consistent": check.is_consistent,
+                "issues": issues,
+                "corrections": corrections or [],
+            }
+        try:
+            print("[Report] 生成报告:")
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.error("报告摘要序列化失败: %s", exc)

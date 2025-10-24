@@ -62,6 +62,21 @@ class EvidenceTracker:
             return None
         return data.get("result")  # type: ignore[return-value]
 
+    def resolve(self, result_id: str) -> Optional[Dict[str, object]]:
+        """
+        返回便于溯源的证据信息，包括原文、来源标识等。
+        """
+        result = self.lookup(result_id)
+        if result is None:
+            return None
+        return {
+            "result_id": result.result_id,
+            "source_id": result.metadata.source_id,
+            "source_type": result.metadata.source_type,
+            "evidence": result.evidence,
+            "metadata": result.metadata.model_dump(),
+        }
+
     @staticmethod
     def _make_key(result: RetrievalResult) -> str:
         return f"{result.metadata.source_id}:{result.granularity}"
