@@ -7,11 +7,13 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain.tools.retriever import create_retriever_tool
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.tools import BaseTool
 
 from graphrag_agent.config.prompt import LC_SYSTEM_PROMPT, contextualize_q_system_prompt
 from graphrag_agent.config.settings import lc_description
 from graphrag_agent.search.tool.base import BaseSearchTool
 from graphrag_agent.search.local_search import LocalSearch
+from graphrag_agent.search.retrieval_adapter import results_from_documents, results_to_payload
 
 
 class LocalSearchTool(BaseSearchTool):
@@ -158,77 +160,119 @@ class LocalSearchTool(BaseSearchTool):
         # 使用基类的标准方法
         return self.filter_by_relevance(query, docs, top_k=5)
 
-    @traceable
-    def search(self, query_input: Any) -> str:
-        """
-        执行本地搜索
-        
-        参数:
-            query_input: 查询输入，可以是字符串或字典
-            
-        返回:
-            str: 搜索结果
-        """
-        overall_start = time.time()
-        
-        # 解析输入
-        if isinstance(query_input, dict) and "query" in query_input:
-            query = query_input["query"]
+    def _normalize_input(self, query_input: Any) -> Dict[str, Any]:
+        """规范化输入，返回包含query与keywords的字典。"""
+        if isinstance(query_input, dict):
+            query = query_input.get("query") or query_input.get("input") or ""
             keywords = query_input.get("keywords", [])
         else:
             query = str(query_input)
             keywords = []
-        
-        # 检查缓存
-        cache_key = query
-        if keywords:
-            cache_key = f"{query}||{','.join(sorted(keywords))}"
-        
-        cached_result = self.cache_manager.get(cache_key)
-        if cached_result:
-            return cached_result
-        
-        # 使用RAG链执行搜索
-        try:
-            ai_msg = self.rag_chain.invoke({
-                "input": query,
-                "response_type": "多个段落",
-                "chat_history": self.chat_history,
-            })
-            
-            # 获取结果
-            result = ai_msg.get("answer", "抱歉，我无法回答这个问题。")
-            
-            # 缓存结果
-            self.cache_manager.set(cache_key, result)
-            
-            # 记录性能指标
-            self.performance_metrics["total_time"] = time.time() - overall_start
+        return {"query": query, "keywords": keywords}
 
-            if not result:
-                return "未找到相关信息"
-            return result
+    @traceable
+    def search(self, query_input: Any) -> str:
+        """兼容旧接口，返回纯文本答案。"""
+        structured = self.structured_search(query_input)
+        return structured.get("answer", "未找到相关信息")
+
+    def structured_search(self, query_input: Any) -> Dict[str, Any]:
+        """
+        执行本地搜索并返回结构化结果，包含标准化的RetrievalResult。
+        """
+        overall_start = time.time()
+        parsed = self._normalize_input(query_input)
+        query = parsed["query"]
+        keywords = parsed["keywords"]
+
+        if not query:
+            raise ValueError("query不能为空")
+
+        cache_key = query if not keywords else f"{query}||{','.join(sorted(keywords))}"
+        structured_cache_key = f"{cache_key}::structured"
+
+        cached_structured = self.cache_manager.get(structured_cache_key)
+        if isinstance(cached_structured, dict):
+            return cached_structured
+
+        cached_answer = self.cache_manager.get(cache_key)
+
+        try:
+            chain_output = self.rag_chain.invoke(
+                {
+                    "input": query,
+                    "response_type": "多个段落",
+                    "chat_history": self.chat_history,
+                }
+            )
+
+            answer = chain_output.get("answer") or "抱歉，我无法回答这个问题。"
+            documents = chain_output.get("context") or []
+            retrieval_results = results_to_payload(
+                results_from_documents(documents, source="local_search")
+            )
+
+            structured_result = {
+                "query": query,
+                "keywords": keywords,
+                "answer": answer,
+                "retrieval_results": retrieval_results,
+                "raw_context": [
+                    {"page_content": getattr(doc, "page_content", ""), "metadata": getattr(doc, "metadata", {})}
+                    for doc in documents
+                ],
+            }
+
+            # 缓存结构化结果与纯文本答案
+            self.cache_manager.set(structured_cache_key, structured_result)
+            if cached_answer is None:
+                self.cache_manager.set(cache_key, answer)
+
+            self.performance_metrics["total_time"] = time.time() - overall_start
+            return structured_result
+
         except Exception as e:
             print(f"本地搜索失败: {e}")
             error_msg = f"搜索过程中出现问题: {str(e)}"
-            
-            # 记录性能指标
             self.performance_metrics["total_time"] = time.time() - overall_start
-            
-            return error_msg
+            return {
+                "query": query,
+                "keywords": keywords,
+                "answer": error_msg,
+                "retrieval_results": [],
+                "raw_context": [],
+                "error": str(e),
+            }
     
     def get_tool(self):
-        """
-        返回LangChain兼容的检索工具
-        
-        返回:
-            BaseTool: 检索工具实例
-        """
+        """返回兼容旧流程的Retriever工具。"""
         return create_retriever_tool(
             self.retriever,
             "lc_search_tool",
             lc_description,
         )
+
+    def get_structured_tool(self) -> BaseTool:
+        """返回可直接输出结构化结果的工具版本。"""
+        outer = self
+
+        class LocalSearchStructuredTool(BaseTool):
+            name: str = "local_search_structured"
+            description: str = (
+                "结构化本地搜索工具：返回回答、检索上下文以及标准化的RetrievalResult列表。"
+            )
+
+            def _run(self_tool, query: Any, **kwargs: Any) -> Dict[str, Any]:
+                payload = query
+                if not isinstance(query, dict):
+                    payload = {"query": query}
+                payload.update(kwargs)
+                return outer.structured_search(payload)
+
+            def _arun(self_tool, *args: Any, **kwargs: Any):
+                raise NotImplementedError("异步执行未实现")
+
+        return LocalSearchStructuredTool()
     
     def close(self):
         """关闭资源"""

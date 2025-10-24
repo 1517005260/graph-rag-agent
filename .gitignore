@@ -11,3 +11,6 @@ evaluation_results/
 evaluation_results_with_golden/
 evaluation_results_no_golden/
 file_registry.json
+documents/
+hotpot_dev_distractor_v1.json
+outputs/

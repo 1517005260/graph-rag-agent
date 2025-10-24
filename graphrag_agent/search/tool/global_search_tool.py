@@ -7,14 +7,19 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 from graphrag_agent.config.prompt import MAP_SYSTEM_PROMPT, REDUCE_SYSTEM_PROMPT
-from graphrag_agent.config.settings import gl_description
+from graphrag_agent.config.settings import gl_description, GLOBAL_SEARCH_SETTINGS
 from graphrag_agent.search.tool.base import BaseSearchTool
+from graphrag_agent.search.retrieval_adapter import (
+    create_retrieval_metadata,
+    create_retrieval_result,
+    results_to_payload,
+)
 
 
 class GlobalSearchTool(BaseSearchTool):
     """全局搜索工具，基于知识图谱和Map-Reduce模式实现跨社区的广泛查询"""
 
-    def __init__(self, level: int = 0):
+    def __init__(self, level: int = None):
         """
         初始化全局搜索工具
         
@@ -22,7 +27,9 @@ class GlobalSearchTool(BaseSearchTool):
             level: 社区层级，默认为0
         """
         # 设置社区层级
-        self.level = level
+        self.level = (
+            level if level is not None else GLOBAL_SEARCH_SETTINGS["default_level"]
+        )
         
         # 调用父类构造函数
         super().__init__(cache_dir="./cache/global_search")
@@ -202,7 +209,7 @@ class GlobalSearchTool(BaseSearchTool):
         返回:
             List[str]: 中间结果列表
         """
-        batch_size = 5  # 每批处理5个社区，提高效率
+        batch_size = GLOBAL_SEARCH_SETTINGS["community_batch_size"]  # 每批处理若干社区，提高效率
         
         results = []
         
@@ -236,67 +243,112 @@ class GlobalSearchTool(BaseSearchTool):
             "response_type": "多个段落",
         })
     
-    def search(self, query_input: Any) -> List[str]:
-        """
-        执行全局搜索，实现Map-Reduce模式
-        
-        参数:
-            query_input: 查询输入，可以是字符串或包含查询和关键词的字典
-            
-        返回:
-            List[str]: 中间结果列表（用于GraphAgent的reduce阶段）
-        """
-        overall_start = time.time()
-        
-        # 解析输入
-        if isinstance(query_input, dict) and "query" in query_input:
-            query = query_input["query"]
-            keywords = query_input.get("keywords", [])
+    def _normalize_input(self, query_input: Any) -> Dict[str, Any]:
+        """标准化输入格式。"""
+        if isinstance(query_input, dict):
+            query = query_input.get("query") or query_input.get("input") or ""
+            keywords = query_input.get("keywords")
         else:
             query = str(query_input)
-            # 提取关键词
-            extracted_keywords = self.extract_keywords(query)
-            keywords = extracted_keywords.get("keywords", [])
-        
-        # 检查缓存
-        cache_key = query
-        if keywords:
-            cache_key = f"{query}||{','.join(sorted(keywords))}"
-        
-        cached_result = self.cache_manager.get(cache_key)
-        if cached_result:
-            return cached_result
-        
+            keywords = None
+        if not keywords:
+            extracted = self.extract_keywords(query)
+            keywords = extracted.get("keywords", [])
+        return {"query": query, "keywords": keywords}
+
+    def _community_results_to_retrieval(self, communities: List[dict]) -> List[Dict[str, Any]]:
+        """将社区数据转换为RetrievalResult payload。"""
+        retrieval_results = []
+        for item in communities:
+            info = item.get("output", item)
+            community_id = str(info.get("communityId") or info.get("id") or "")
+            summary = info.get("full_content") or info.get("summary") or ""
+            if not community_id:
+                community_id = str(hash(summary))  # fallback
+            metadata = create_retrieval_metadata(
+                source_id=community_id,
+                source_type="community",
+                confidence=info.get("confidence", 0.6),
+                community_id=community_id,
+                extra={"raw": info},
+            )
+            result = create_retrieval_result(
+                evidence=summary,
+                source="global_search",
+                granularity="DO",
+                metadata=metadata,
+                score=info.get("score", 0.6),
+            )
+            retrieval_results.append(result)
+        return results_to_payload(retrieval_results)
+
+    def search(self, query_input: Any) -> List[str]:
+        """兼容旧接口，返回中间结果列表。"""
+        structured = self.structured_search(query_input)
+        return structured.get("intermediate_results", [])
+
+    def structured_search(self, query_input: Any) -> Dict[str, Any]:
+        """执行全局搜索并返回结构化数据。"""
+        overall_start = time.time()
+        parsed = self._normalize_input(query_input)
+        query = parsed["query"]
+        keywords = parsed["keywords"]
+
+        if not query:
+            raise ValueError("query不能为空")
+
+        cache_key = query if not keywords else f"{query}||{','.join(sorted(keywords))}"
+        structured_cache_key = f"{cache_key}::structured"
+
+        cached_structured = self.cache_manager.get(structured_cache_key)
+        if isinstance(cached_structured, dict):
+            return cached_structured
+
+        cached_intermediate = self.cache_manager.get(cache_key)
+
         try:
-            # 获取社区数据
             community_data = self._get_community_data(keywords)
-            
-            # 如果没有找到相关社区，返回空结果
             if not community_data:
-                return []
-            
-            # 处理社区数据，生成中间结果
+                return {
+                    "query": query,
+                    "keywords": keywords,
+                    "intermediate_results": [],
+                    "final_answer": "",
+                    "retrieval_results": [],
+                }
+
             intermediate_results = self._process_communities(query, community_data)
-            
-            # 缓存结果
-            self.cache_manager.set(cache_key, intermediate_results)
-            
-            # 记录性能指标
+            final_answer = self._reduce_results(query, intermediate_results) if intermediate_results else ""
+            retrieval_payload = self._community_results_to_retrieval(community_data)
+
+            structured_result = {
+                "query": query,
+                "keywords": keywords,
+                "intermediate_results": intermediate_results,
+                "final_answer": final_answer,
+                "retrieval_results": retrieval_payload,
+            }
+
+            self.cache_manager.set(structured_cache_key, structured_result)
+            if cached_intermediate is None:
+                self.cache_manager.set(cache_key, intermediate_results)
+
             self.performance_metrics["total_time"] = time.time() - overall_start
-            
-            return intermediate_results
-        
+            return structured_result
+
         except Exception as e:
             print(f"全局搜索失败: {e}")
-            return [f"搜索过程中出现错误: {str(e)}"]
+            return {
+                "query": query,
+                "keywords": keywords,
+                "intermediate_results": [],
+                "final_answer": f"搜索过程中出现错误: {str(e)}",
+                "retrieval_results": [],
+                "error": str(e),
+            }
     
     def get_tool(self) -> BaseTool:
-        """
-        获取搜索工具
-        
-        返回:
-            BaseTool: 搜索工具实例
-        """
+        """兼容旧流程的工具。"""
         class GlobalRetrievalTool(BaseTool):
             name : str= "global_retriever"
             description : str = gl_description
@@ -308,6 +360,26 @@ class GlobalSearchTool(BaseSearchTool):
                 raise NotImplementedError("异步执行未实现")
         
         return GlobalRetrievalTool()
+
+    def get_structured_tool(self) -> BaseTool:
+        """可返回结构化结果的工具。"""
+        outer = self
+
+        class GlobalStructuredTool(BaseTool):
+            name: str = "global_search_structured"
+            description: str = "结构化全局搜索工具：返回Map/Reduce结果及RetrievalResult列表。"
+
+            def _run(self_tool, query: Any, **kwargs: Any) -> Dict[str, Any]:
+                payload = query
+                if not isinstance(query, dict):
+                    payload = {"query": query}
+                payload.update(kwargs)
+                return outer.structured_search(payload)
+
+            def _arun(self_tool, *args: Any, **kwargs: Any):
+                raise NotImplementedError("异步执行未实现")
+
+        return GlobalStructuredTool()
     
     def close(self):
         """关闭资源"""

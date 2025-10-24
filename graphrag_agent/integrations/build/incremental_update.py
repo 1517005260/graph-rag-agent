@@ -13,7 +13,7 @@ from graphrag_agent.integrations.build.incremental.manual_edit_manager import Ma
 from graphrag_agent.graph.indexing.embedding_manager import EmbeddingManager
 from graphrag_agent.community import CommunityDetectorFactory, CommunitySummarizerFactory
 from graphrag_agent.config.neo4jdb import get_db_manager
-from graphrag_agent.config.settings import FILES_DIR, community_algorithm, MAX_WORKERS, BATCH_SIZE
+from graphrag_agent.config.settings import FILES_DIR, community_algorithm, MAX_WORKERS, BATCH_SIZE, NEO4J_CONFIG
 from graphrag_agent.integrations.build.incremental.incremental_update_scheduler import IncrementalUpdateScheduler
 
 class IncrementalUpdateManager:
@@ -223,8 +223,8 @@ class IncrementalUpdateManager:
             try:
                 from graphdatascience import GraphDataScience
                 gds = GraphDataScience(
-                    os.environ["NEO4J_URI"],
-                    auth=(os.environ["NEO4J_USERNAME"], os.environ["NEO4J_PASSWORD"])
+                    NEO4J_CONFIG["uri"],
+                    auth=(NEO4J_CONFIG["username"], NEO4J_CONFIG["password"])
                 )
             except Exception as e:
                 self.console.print(f"[yellow]导入GDS库失败，无法执行社区检测: {e}[/yellow]")

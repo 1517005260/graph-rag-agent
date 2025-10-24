@@ -12,8 +12,14 @@ graphrag_agent/
 │   ├── hybrid_agent.py  # 混合搜索Agent
 │   ├── naive_rag_agent.py  # 简单向量检索Agent
 │   ├── deep_research_agent.py  # 深度研究Agent
-│   ├── fusion_agent.py  # 融合型Agent
-│   └── agent_coordinator.py  # 多Agent协调器
+│   ├── fusion_agent.py  # Fusion GraphRAG Agent
+│   └── multi_agent/     # Plan-Execute-Report 多智能体编排栈
+│       ├── planner/     # 规划器：澄清、任务分解、计划审校
+│       ├── executor/    # 执行器：检索、研究、反思执行器及协调器
+│       ├── reporter/    # 报告器：纲要生成、章节写作、一致性检查
+│       ├── core/        # 核心模型：PlanSpec、State、ExecutionRecord
+│       ├── tools/       # 工具：证据追踪、检索适配器、JSON解析
+│       └── integration/ # 集成：工厂类、兼容门面
 │
 ├── cache_manager/       # 📦 缓存管理模块
 │   ├── manager.py       # 统一缓存管理器
@@ -139,7 +145,18 @@ graphrag_agent/
 - **GraphAgent**: 基于图结构的Agent，支持关系推理
 - **HybridAgent**: 混合多种检索方式的Agent
 - **DeepResearchAgent**: 深度研究Agent，支持多步推理
-- **FusionGraphRAGAgent**: 融合型Agent，结合多种策略优势
+- **FusionGraphRAGAgent**: 最先进的Agent，采用Plan-Execute-Report多智能体架构
+
+**多智能体编排栈（multi_agent/）**：
+
+新一代Plan-Execute-Report架构，提供智能化任务规划与执行能力：
+
+- **Planner**: 规划器，包含澄清（Clarifier）、任务分解（TaskDecomposer）、计划审校（PlanReviewer）
+- **Executor**: 执行器，包含检索执行器（RetrievalExecutor）、研究执行器（ResearchExecutor）、反思器（Reflector）和工作协调器（WorkerCoordinator）
+- **Reporter**: 报告生成器，采用Map-Reduce模式生成结构化长文档
+- **Core**: 核心数据模型，包括PlanSpec（计划规范）、State（状态管理）、ExecutionRecord（执行记录）
+- **Tools**: 工具组件，包括证据追踪、检索适配器、JSON解析器
+- **Integration**: 集成层，提供工厂类和兼容门面
 
 ### 2. 缓存管理（cache_manager/）
 

@@ -1,6 +1,6 @@
 # Agent 模块
 
-`agent` 模块是项目的核心交互层，负责整合各种搜索工具并提供用户交互接口。本模块实现了多种智能 Agent，支持从简单的向量检索到复杂的多 Agent 协同工作，为用户提供灵活、高效的知识检索和推理服务。
+`agent` 模块是项目的核心交互层，负责整合各种搜索工具并提供用户交互接口。本模块实现了多种智能 Agent，支持从简单的向量检索到复杂的多智能体协同工作，为用户提供灵活、高效的知识检索和推理服务。
 
 ## 目录结构
 
@@ -12,8 +12,42 @@ graphrag_agent/agents/
 ├── hybrid_agent.py            # 使用混合搜索的 Agent 实现
 ├── naive_rag_agent.py         # 使用简单向量检索的 Naive RAG Agent
 ├── deep_research_agent.py     # 使用深度研究工具的 Agent，支持多步推理
-├── fusion_agent.py            # Fusion GraphRAG Agent，基于多 Agent 协作架构
-└── agent_coordinator.py       # 多 Agent 协作系统协调器
+├── fusion_agent.py            # Fusion GraphRAG Agent，基于多智能体协作架构
+└── multi_agent/               # Plan-Execute-Report 多智能体编排栈
+    ├── planner/               # 规划器模块
+    │   ├── base_planner.py    # 规划器基类
+    │   ├── clarifier.py       # 澄清器：识别和澄清需求
+    │   ├── task_decomposer.py # 任务分解器：将查询分解为子任务
+    │   └── plan_reviewer.py   # 计划审校器：审核和优化计划
+    ├── executor/              # 执行器模块
+    │   ├── base_executor.py   # 执行器基类
+    │   ├── retrieval_executor.py # 检索执行器：执行各类搜索任务
+    │   ├── research_executor.py  # 研究执行器：执行深度研究任务
+    │   ├── reflector.py       # 反思器：质量控制和改进建议
+    │   └── worker_coordinator.py # 工作协调器：调度和管理执行器
+    ├── reporter/              # 报告生成器模块
+    │   ├── base_reporter.py   # 报告器基类
+    │   ├── outline_builder.py # 纲要生成器
+    │   ├── section_writer.py  # 章节写作器
+    │   ├── consistency_checker.py # 一致性检查器
+    │   ├── formatter.py       # 引用格式化器
+    │   └── mapreduce/         # Map-Reduce报告生成
+    │       ├── evidence_mapper.py   # 证据映射器
+    │       ├── section_reducer.py   # 章节归约器
+    │       └── report_assembler.py  # 报告组装器
+    ├── core/                  # 核心数据模型
+    │   ├── plan_spec.py       # PlanSpec：任务计划规范
+    │   ├── state.py           # State：状态管理
+    │   ├── execution_record.py # ExecutionRecord：执行记录
+    │   └── retrieval_result.py # RetrievalResult：检索结果
+    ├── tools/                 # 工具组件
+    │   ├── evidence_tracker.py # 证据追踪器
+    │   ├── retrieval_adapter.py # 检索适配器
+    │   └── json_parser.py     # JSON解析器
+    ├── integration/           # 集成层
+    │   ├── multi_agent_factory.py # 多智能体工厂
+    │   └── legacy_facade.py   # 兼容门面
+    └── orchestrator.py        # 编排器：协调Planner-Executor-Reporter
 ```
 
 ## 实现思路
@@ -80,103 +114,53 @@ def _setup_graph(self):
    
 5. **FusionGraphRAGAgent**：最复杂的实现，基于多 Agent 协作架构，集成多种搜索策略和知识融合方法
 
-### 多 Agent 协作系统 (FusionGraphRAG)
+### 多智能体协作系统 (FusionGraphRAG)
 
-`FusionGraphRAGAgent` 和 `GraphRAGAgentCoordinator` 实现了多 Agent 协作的高级架构。这种方法将搜索、推理、合成等任务分配给专门的 Agent 处理，大大提高了系统的灵活性和性能。
+`FusionGraphRAGAgent` 通过 `MultiAgentFacade` 将查询交给新的 Plan-Execute-Report 栈执行。该栈由 `agents.multi_agent` 模块提供，核心组件包括：
 
-#### 1. 协调器设计
+#### 1. Planner（规划器）
 
-协调器负责管理多个专用 Agent，协调它们的工作流程：
+通过三个子组件生成结构化的 `PlanSpec`：
 
-```python
-def __init__(self, llm=None):
-    # 初始化语言模型
-    self.llm = llm or get_llm_model()
-    self.stream_llm = get_stream_llm_model()
-    self.embeddings = get_embeddings_model()
-    
-    # 创建专用Agent
-    self.retrieval_planner = self._create_retrieval_planner()
-    self.local_searcher = self._create_local_searcher()
-    self.global_searcher = self._create_global_searcher()
-    self.explorer = self._create_explorer()
-    self.chain_explorer = self._create_chain_explorer()
-    self.synthesizer = self._create_synthesizer()
-    self.thinking_engine = self._create_thinking_engine()
-```
+- **Clarifier（澄清器）**：识别查询中的歧义和未明确需求，生成澄清问题
+- **TaskDecomposer（任务分解器）**：将复杂查询分解为多个子任务，构建任务依赖图（TaskGraph）
+- **PlanReviewer（计划审校器）**：审核任务计划的合理性，优化任务顺序和参数
 
-#### 2. 检索计划生成器
+**输出**：`PlanSpec`，包含问题陈述（ProblemStatement）、任务图（TaskGraph）、验收标准（AcceptanceCriteria）
 
-该组件分析查询，创建最佳检索计划，决定使用哪些搜索策略以及它们的优先级：
+#### 2. WorkerCoordinator（执行协调器）
 
-```python
-def plan(self, query: str) -> Dict[str, Any]:
-    """分析查询并生成检索计划"""
-    prompt = f"""
-    分析以下查询，创建一个全面的检索计划以获取所需信息。
-    
-    查询: "{query}"
-    
-    请考虑:
-    1. 查询的复杂度和所需的检索深度
-    2. 可能涉及的知识领域和关键实体
-    3. 是否需要全局概览或具体细节
-    4. 需要进行的探索步骤
-    5. 是否需要追踪实体间的关系路径
-    6. 查询是否涉及时间信息
-    ...
-    """
-```
+根据计划信号调度不同类型的执行器：
 
-#### 3. 多路径执行
+- **RetrievalExecutor（检索执行器）**：执行 local_search、global_search、hybrid_search 等检索任务
+- **ResearchExecutor（研究执行器）**：执行 deep_research、chain_exploration 等深度研究任务
+- **Reflector（反思器）**：对执行结果进行质量评估，提供改进建议
 
-协调器根据检索计划并行执行多种搜索策略，包括本地搜索、全局搜索、深度探索和链式探索：
+**特性**：
+- 支持串行（sequential）、并行（parallel）、自适应（adaptive）三种执行模式
+- 记录每个任务的执行证据（ExecutionRecord）和元数据
+- 通过 EvidenceTracker 统一管理所有检索结果
 
-```python
-# 按优先级排序任务
-tasks = sorted(retrieval_plan.get("tasks", []), 
-             key=lambda x: x.get("priority", 3), 
-             reverse=True)
+#### 3. Reporter（报告生成器）
 
-for task in tasks:
-    task_type = task.get("type", "")
-    task_query = task.get("query", query)
-    
-    # 根据任务类型执行不同的搜索
-    if task_type == "local_search":
-        # 执行本地搜索...
-    elif task_type == "global_search":
-        # 执行全局搜索...
-    elif task_type == "exploration":
-        # 执行深度探索...
-    elif task_type == "chain_exploration":
-        # 执行Chain of Exploration...
-```
+采用 Map-Reduce 模式生成结构化长文档：
 
-#### 4. 结果合成
+- **OutlineBuilder（纲要生成器）**：基于任务计划和证据生成报告大纲
+- **SectionWriter（章节写作器）**：为每个章节编写内容，支持传统模式和 Map-Reduce 模式
+- **EvidenceMapper（证据映射器）**：将大量证据分批映射为摘要
+- **SectionReducer（章节归约器）**：将证据摘要归约为连贯的章节文本
+- **ReportAssembler（报告组装器）**：组装最终报告，添加引言和结论
+- **ConsistencyChecker（一致性检查器）**：检查报告内容与证据的一致性
+- **CitationFormatter（引用格式化器）**：生成标准化的引用列表
 
-最后，协调器使用合成器 Agent 整合所有检索结果，生成最终答案：
+**特性**：
+- 支持报告级缓存和章节级缓存
+- 证据数量超过阈值时自动启用 Map-Reduce 模式
+- 支持并行 Map 操作，提高生成速度
 
-```python
-def synthesize(self, query: str, results: Dict[str, List], plan: Dict[str, Any],
-             thinking_process: str = None) -> str:
-    """整合结果并生成答案"""
-    # 构建提示
-    prompt = f"""
-    基于以下检索结果，回答用户的问题。
-    
-    用户问题: "{query}"
-    
-    ## 检索计划
-    {json.dumps(plan, ensure_ascii=False, indent=2)}
-    """
-    
-    # 添加各类检索结果...
-    
-    # 生成最终答案
-    response = self.llm.invoke(prompt)
-    return response.content
-```
+#### 4. Legacy Facade（兼容层）
+
+`MultiAgentFacade` 封装了 Plan-Execute-Report 流程，提供与旧版协调器相同的 `process_query` 接口，方便逐步迁移。`FusionGraphRAGAgent` 在常规查询场景下调用该封装，同时保留深度研究工具等扩展能力用于高复杂度任务。
 
 ### 流式处理支持
 
@@ -257,8 +241,8 @@ class FusionGraphRAGAgent(BaseAgent):
         # 调用父类构造函数
         super().__init__(cache_dir=self.cache_dir)
         
-        # 创建协调器
-        self.coordinator = GraphRAGAgentCoordinator(self.llm)
+        # 创建多智能体编排入口
+        self.multi_agent = MultiAgentFacade(cache_manager=self.cache_manager)
 ```
 
 ## 使用场景

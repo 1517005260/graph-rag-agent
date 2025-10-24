@@ -300,7 +300,7 @@ class GraphAgent(BaseAgent):
                 buffer += sentences[i]
                 
                 # 当缓冲区包含完整句子或达到合理大小时输出
-                if (i % 2 == 1) or len(buffer) >= 40:
+                if (i % 2 == 1) or len(buffer) >= self.stream_flush_threshold:
                     yield buffer
                     buffer = ""
                     await asyncio.sleep(0.01)
@@ -344,7 +344,7 @@ class GraphAgent(BaseAgent):
 
         for i in range(len(sentences)):
             buffer += sentences[i]
-            if i % 2 == 1 or len(buffer) >= 40:
+        if i % 2 == 1 or len(buffer) >= self.stream_flush_threshold:
                 yield buffer
                 buffer = ""
                 await asyncio.sleep(0.01)
@@ -369,7 +369,7 @@ class GraphAgent(BaseAgent):
                 buffer += sentences[i]
                 
                 # 当缓冲区包含完整句子或达到合理大小时输出
-                if (i % 2 == 1) or len(buffer) >= 40:
+                if (i % 2 == 1) or len(buffer) >= self.stream_flush_threshold:
                     yield buffer
                     buffer = ""
                     await asyncio.sleep(0.01)
@@ -432,7 +432,7 @@ class GraphAgent(BaseAgent):
                 buffer += sentences[i]
                 
                 # 当缓冲区包含完整句子或达到合理大小时输出
-                if (i % 2 == 1) or len(buffer) >= 40:
+                if (i % 2 == 1) or len(buffer) >= self.stream_flush_threshold:
                     yield buffer
                     buffer = ""
                     await asyncio.sleep(0.01)

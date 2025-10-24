@@ -1,33 +1,67 @@
+import os
 from pathlib import Path
+from typing import Optional
 
-# ===== 基础配置 =====
+from dotenv import load_dotenv
 
-# 基础路径设置
+# 统一加载环境变量，确保配置来源一致
+load_dotenv()
+
+
+def _get_env_int(key: str, default: Optional[int]) -> Optional[int]:
+    """获取整型环境变量，未设置时返回默认值"""
+    raw = os.getenv(key)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"环境变量 {key} 需要整数值，但当前为 {raw}") from exc
+
+
+def _get_env_float(key: str, default: Optional[float]) -> Optional[float]:
+    """获取浮点型环境变量，未设置时返回默认值"""
+    raw = os.getenv(key)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ValueError(f"环境变量 {key} 需要浮点值，但当前为 {raw}") from exc
+
+
+def _get_env_bool(key: str, default: bool) -> bool:
+    """获取布尔型环境变量，支持 true/false/1/0 表达式"""
+    raw = os.getenv(key)
+    if raw is None or raw == "":
+        return default
+    return raw.lower() in {"1", "true", "yes", "y", "on"}
+
+
+# ===== 基础路径设置 =====
+
 BASE_DIR = Path(__file__).resolve().parent.parent  # graphrag_agent包目录
 PROJECT_ROOT = BASE_DIR.parent  # 项目根目录
-FILES_DIR = PROJECT_ROOT / 'files'
-FILE_REGISTRY_PATH = PROJECT_ROOT / 'file_registry.json'  # 文件注册表路径
+FILES_DIR = PROJECT_ROOT / "files"
+FILE_REGISTRY_PATH = PROJECT_ROOT / "file_registry.json"  # 文件注册表路径
 
-# 知识库主题设置，用于deepsearch（reasoning提示词）
-KB_NAME = "华东理工大学"
+# ===== 知识库与系统参数 =====
 
-# 系统运行参数
-workers = 2  # fastapi 并发进程数
+KB_NAME = "华东理工大学"  # 知识库主题，用于deepsearch
+workers = _get_env_int("FASTAPI_WORKERS", 2) or 2  # FastAPI 并发进程数
 
 # ===== 知识图谱配置 =====
 
-# 知识图谱主题设置
-theme = "华东理工大学学生管理"
+theme = "华东理工大学学生管理"  # 知识图谱主题
 
-# 知识图谱实体与关系类型
 entity_types = [
     "学生类型",
     "奖学金类型",
     "处分类型",
     "部门",
     "学生职责",
-    "管理规定"
-]
+    "管理规定",
+]  # 知识图谱实体类型
 
 relationship_types = [
     "申请",
@@ -38,200 +72,256 @@ relationship_types = [
     "管理",
     "权利义务",
     "互斥",
-]
+]  # 知识图谱关系类型
 
-# 冲突解决与更新策略
-# manual_first: 优先保留手动编辑
-# auto_first: 优先自动更新
-# merge: 尝试合并
-conflict_strategy = "manual_first"
+# 冲突解决策略：manual_first / auto_first / merge
+conflict_strategy = os.getenv("GRAPH_CONFLICT_STRATEGY", "manual_first")
 
-# 社区检测算法配置
-# sllpa如果发现不了社区，则换成leiden效果会好一点
-community_algorithm = 'leiden'
+# 社区检测算法：leiden / sllpa
+community_algorithm = os.getenv("GRAPH_COMMUNITY_ALGORITHM", "leiden")
 
 # ===== 文本处理配置 =====
 
-# 文本处理参数
-CHUNK_SIZE = 500
-OVERLAP = 100
-MAX_TEXT_LENGTH = 500000
-similarity_threshold = 0.9
+CHUNK_SIZE = _get_env_int("CHUNK_SIZE", 500) or 500  # 文本分块大小
+OVERLAP = _get_env_int("CHUNK_OVERLAP", 100) or 100  # 分块重叠长度
+MAX_TEXT_LENGTH = _get_env_int("MAX_TEXT_LENGTH", 500000) or 500000  # 最大文本长度
+similarity_threshold = _get_env_float("SIMILARITY_THRESHOLD", 0.9) or 0.9  # 向量相似度阈值
 
-# 回答生成配置
-response_type = "多个段落"
+# ===== 回答生成配置 =====
 
-# ===== Agent工具配置 =====
+response_type = os.getenv("RESPONSE_TYPE", "多个段落")  # 默认回答形式
 
-# Agent工具描述
-lc_description = "用于需要具体细节的查询。检索华东理工大学学生管理文件中的具体规定、条款、流程等详细内容。适用于'某个具体规定是什么'、'处理流程如何'等问题。"
-gl_description = "用于需要总结归纳的查询。分析华东理工大学学生管理体系的整体框架、管理原则、学生权利义务等宏观内容。适用于'学校的学生管理总体思路'、'学生权益保护机制'等需要系统性分析的问题。"
-naive_description = "基础检索工具，直接查找与问题最相关的文本片段，不做复杂分析。快速获取华东理工大学相关政策，返回最匹配的原文段落。"
+# ===== Agent 工具描述 =====
 
-# 前端示例问题
+lc_description = (
+    "用于需要具体细节的查询。检索华东理工大学学生管理文件中的具体规定、条款、流程等详细内容。"
+    "适用于'某个具体规定是什么'、'处理流程如何'等问题。"
+)
+gl_description = (
+    "用于需要总结归纳的查询。分析华东理工大学学生管理体系的整体框架、管理原则、学生权利义务等宏观内容。"
+    "适用于'学校的学生管理总体思路'、'学生权益保护机制'等需要系统性分析的问题。"
+)
+naive_description = (
+    "基础检索工具，直接查找与问题最相关的文本片段，不做复杂分析。快速获取华东理工大学相关政策，返回最匹配的原文段落。"
+)
+
 examples = [
     "旷课多少学时会被退学？",
     "国家奖学金和国家励志奖学金互斥吗？",
     "优秀学生要怎么申请？",
     "那上海市奖学金呢？",
-]
+]  # 前端示例问题
 
 # ===== 性能优化配置 =====
 
-# 并行处理配置
-MAX_WORKERS = 4                # 并行工作线程数
-BATCH_SIZE = 100               # 批处理大小
-ENTITY_BATCH_SIZE = 50         # 实体处理批次大小
-CHUNK_BATCH_SIZE = 100         # 文本块处理批次大小
-EMBEDDING_BATCH_SIZE = 64      # 嵌入向量计算批次大小
-LLM_BATCH_SIZE = 5             # LLM处理批次大小
+MAX_WORKERS = _get_env_int("MAX_WORKERS", 4) or 4  # 并行工作线程数
+BATCH_SIZE = _get_env_int("BATCH_SIZE", 100) or 100  # 批处理大小
+ENTITY_BATCH_SIZE = _get_env_int("ENTITY_BATCH_SIZE", 50) or 50  # 实体批次大小
+CHUNK_BATCH_SIZE = _get_env_int("CHUNK_BATCH_SIZE", 100) or 100  # 文本块批次
+EMBEDDING_BATCH_SIZE = _get_env_int("EMBEDDING_BATCH_SIZE", 64) or 64  # 向量批次
+LLM_BATCH_SIZE = _get_env_int("LLM_BATCH_SIZE", 5) or 5  # LLM 批次
+COMMUNITY_BATCH_SIZE = _get_env_int("COMMUNITY_BATCH_SIZE", 50) or 50  # 社区批次大小
 
-# 索引和社区检测配置
-COMMUNITY_BATCH_SIZE = 50      # 社区处理批次大小
+# ===== GDS 相关配置 =====
 
-# GDS相关配置
-GDS_MEMORY_LIMIT = 6           # GDS内存限制(GB)
-GDS_CONCURRENCY = 4            # GDS并发度
-GDS_NODE_COUNT_LIMIT = 50000   # GDS节点数量限制
-GDS_TIMEOUT_SECONDS = 300      # GDS超时时间(秒)
+GDS_MEMORY_LIMIT = _get_env_int("GDS_MEMORY_LIMIT", 6) or 6  # GDS 内存限制(GB)
+GDS_CONCURRENCY = _get_env_int("GDS_CONCURRENCY", 4) or 4  # GDS 并发度
+GDS_NODE_COUNT_LIMIT = _get_env_int("GDS_NODE_COUNT_LIMIT", 50000) or 50000  # 节点上限
+GDS_TIMEOUT_SECONDS = _get_env_int("GDS_TIMEOUT_SECONDS", 300) or 300  # 超时时长
 
-# ===== 实体消歧和对齐配置
-DISAMBIG_STRING_THRESHOLD = 0.7  # 字符串匹配阈值
-DISAMBIG_VECTOR_THRESHOLD = 0.85  # 向量相似度阈值
-DISAMBIG_NIL_THRESHOLD = 0.6  # NIL检测阈值
-DISAMBIG_TOP_K = 5  # 候选实体数量
- 
-ALIGNMENT_CONFLICT_THRESHOLD = 0.5  # 冲突检测阈值
-ALIGNMENT_MIN_GROUP_SIZE = 2  # 最小分组大小
+# ===== 实体消歧与对齐配置 =====
 
+DISAMBIG_STRING_THRESHOLD = _get_env_float("DISAMBIG_STRING_THRESHOLD", 0.7) or 0.7
+DISAMBIG_VECTOR_THRESHOLD = _get_env_float("DISAMBIG_VECTOR_THRESHOLD", 0.85) or 0.85
+DISAMBIG_NIL_THRESHOLD = _get_env_float("DISAMBIG_NIL_THRESHOLD", 0.6) or 0.6
+DISAMBIG_TOP_K = _get_env_int("DISAMBIG_TOP_K", 5) or 5
 
-# ===== 搜索模块配置 =====
+ALIGNMENT_CONFLICT_THRESHOLD = (
+    _get_env_float("ALIGNMENT_CONFLICT_THRESHOLD", 0.5) or 0.5
+)
+ALIGNMENT_MIN_GROUP_SIZE = _get_env_int("ALIGNMENT_MIN_GROUP_SIZE", 2) or 2
 
-# 本地搜索配置
-LOCAL_SEARCH_CONFIG = {
-    # 向量检索参数
-    "top_entities": 10,
-    "top_chunks": 10,
-    "top_communities": 2,
-    "top_outside_rels": 10,
-    "top_inside_rels": 10,
+# ===== 路径与缓存配置 =====
 
-    # 索引配置
-    "index_name": "vector",
-    "response_type": response_type,
+DEFAULT_CACHE_ROOT = Path(
+    os.getenv("CACHE_ROOT", PROJECT_ROOT / "cache")
+).expanduser()
+MODEL_CACHE_ROOT = Path(
+    os.getenv("MODEL_CACHE_ROOT", DEFAULT_CACHE_ROOT)
+).expanduser()
+MODEL_CACHE_DIR = MODEL_CACHE_ROOT / "model"
+CACHE_DIR = Path(os.getenv("CACHE_DIR", DEFAULT_CACHE_ROOT)).expanduser()
+TIKTOKEN_CACHE_DIR = Path(
+    os.getenv("TIKTOKEN_CACHE_DIR", DEFAULT_CACHE_ROOT / "tiktoken")
+).expanduser()
+os.environ.setdefault("TIKTOKEN_CACHE_DIR", str(TIKTOKEN_CACHE_DIR))
 
-    # 检索查询模板
-    "retrieval_query": """
-    WITH collect(node) as nodes
-    WITH
-    collect {
-        UNWIND nodes as n
-        MATCH (n)<-[:MENTIONS]-(c:__Chunk__)
-        WITH distinct c, count(distinct n) as freq
-        RETURN {id:c.id, text: c.text} AS chunkText
-        ORDER BY freq DESC
-        LIMIT $topChunks
-    } AS text_mapping,
-    collect {
-        UNWIND nodes as n
-        MATCH (n)-[:IN_COMMUNITY]->(c:__Community__)
-        WITH distinct c, c.community_rank as rank, c.weight AS weight
-        RETURN c.summary
-        ORDER BY rank, weight DESC
-        LIMIT $topCommunities
-    } AS report_mapping,
-    collect {
-        UNWIND nodes as n
-        MATCH (n)-[r]-(m:__Entity__)
-        WHERE NOT m IN nodes
-        RETURN r.description AS descriptionText
-        ORDER BY r.weight DESC
-        LIMIT $topOutsideRels
-    } as outsideRels,
-    collect {
-        UNWIND nodes as n
-        MATCH (n)-[r]-(m:__Entity__)
-        WHERE m IN nodes
-        RETURN r.description AS descriptionText
-        ORDER BY r.weight DESC
-        LIMIT $topInsideRels
-    } as insideRels,
-    collect {
-        UNWIND nodes as n
-        RETURN n.description AS descriptionText
-    } as entities
-    RETURN {
-        Chunks: text_mapping,
-        Reports: report_mapping,
-        Relationships: outsideRels + insideRels,
-        Entities: entities
-    } AS text, 1.0 AS score, {} AS metadata
-    """,
+SENTENCE_TRANSFORMER_MODELS = [
+    item.strip()
+    for item in os.getenv("SENTENCE_TRANSFORMER_MODELS", "").split(",")
+    if item.strip()
+]  # 预加载的本地模型列表
+CACHE_EMBEDDING_PROVIDER = os.getenv(
+    "CACHE_EMBEDDING_PROVIDER", "sentence_transformer"
+).lower()
+CACHE_SENTENCE_TRANSFORMER_MODEL = os.getenv(
+    "CACHE_SENTENCE_TRANSFORMER_MODEL", "all-MiniLM-L6-v2"
+)
+
+CACHE_SETTINGS = {
+    "dir": CACHE_DIR,
+    "memory_only": _get_env_bool("CACHE_MEMORY_ONLY", False),
+    "max_memory_size": _get_env_int("CACHE_MAX_MEMORY_SIZE", 100) or 100,
+    "max_disk_size": _get_env_int("CACHE_MAX_DISK_SIZE", 1000) or 1000,
+    "thread_safe": _get_env_bool("CACHE_THREAD_SAFE", True),
+    "enable_vector_similarity": _get_env_bool(
+        "CACHE_ENABLE_VECTOR_SIMILARITY", True
+    ),
+    "similarity_threshold": _get_env_float(
+        "CACHE_SIMILARITY_THRESHOLD", similarity_threshold
+    )
+    or similarity_threshold,
+    "max_vectors": _get_env_int("CACHE_MAX_VECTORS", 10000) or 10000,
 }
 
-# 全局搜索配置
-GLOBAL_SEARCH_CONFIG = {
-    # 社区层级配置
-    "default_level": 0,  # 层级0
-    "response_type": response_type,
+# ===== Neo4j 连接配置 =====
 
-    # 批处理配置
-    "batch_size": 10,
-    "max_communities": 100,
+NEO4J_URI = os.getenv("NEO4J_URI", "")
+NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
+NEO4J_MAX_POOL_SIZE = _get_env_int("NEO4J_MAX_POOL_SIZE", 10) or 10
+NEO4J_REFRESH_SCHEMA = _get_env_bool("NEO4J_REFRESH_SCHEMA", False)
+
+NEO4J_CONFIG = {
+    "uri": NEO4J_URI,
+    "username": NEO4J_USERNAME,
+    "password": NEO4J_PASSWORD,
+    "max_pool_size": NEO4J_MAX_POOL_SIZE,
+    "refresh_schema": NEO4J_REFRESH_SCHEMA,
 }
 
-# ===== 缓存配置 =====
+# ===== LLM 与嵌入模型配置 =====
 
-# 搜索缓存配置
-SEARCH_CACHE_CONFIG = {
-    # 缓存目录
-    "base_cache_dir": "./cache",
-    "local_search_cache_dir": "./cache/local_search",
-    "global_search_cache_dir": "./cache/global_search",
-    "deep_research_cache_dir": "./cache/deep_research",
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
+OPENAI_EMBEDDINGS_MODEL = os.getenv("OPENAI_EMBEDDINGS_MODEL") or None
+OPENAI_LLM_MODEL = os.getenv("OPENAI_LLM_MODEL") or None
+LLM_TEMPERATURE = _get_env_float("TEMPERATURE", None)
+LLM_MAX_TOKENS = _get_env_int("MAX_TOKENS", None)
 
-    # 缓存策略
-    "max_cache_size": 200,
-    "cache_ttl": 3600,  # 1小时
-
-    # 内存缓存配置
-    "memory_cache_enabled": True,
-    "disk_cache_enabled": True,
+OPENAI_EMBEDDING_CONFIG = {
+    "model": OPENAI_EMBEDDINGS_MODEL,
+    "api_key": OPENAI_API_KEY,
+    "base_url": OPENAI_BASE_URL,
 }
 
-# ===== 推理配置 =====
-
-# 推理引擎配置
-REASONING_CONFIG = {
-    # 迭代配置
-    "max_iterations": 5,
-    "max_search_limit": 10,
-
-    # 思考引擎配置
-    "thinking_depth": 3,
-    "exploration_width": 3,
-    "max_exploration_steps": 5,
-
-    # 证据链配置
-    "max_evidence_items": 50,
-    "evidence_relevance_threshold": 0.7,
-
-    # 验证配置
-    "validation": {
-        "enable_answer_validation": True,
-        "validation_threshold": 0.8,
-        "enable_complexity_estimation": True,
-        "consistency_threshold": 0.7
-    },
-
-    # 探索配置
-    "exploration": {
-        "max_exploration_steps": 5,
-        "exploration_depth": 3,
-        "exploration_breadth": 3,
-        "exploration_width": 3,
-        "relevance_threshold": 0.5,
-        "exploration_decay_factor": 0.8,
-        "enable_backtracking": True
-    }
+OPENAI_LLM_CONFIG = {
+    "model": OPENAI_LLM_MODEL,
+    "temperature": LLM_TEMPERATURE,
+    "max_tokens": LLM_MAX_TOKENS,
+    "api_key": OPENAI_API_KEY,
+    "base_url": OPENAI_BASE_URL,
 }
+
+# ===== 相似实体检测参数 =====
+
+SIMILAR_ENTITY_SETTINGS = {
+    "word_edit_distance": _get_env_int("SIMILAR_ENTITY_WORD_EDIT_DISTANCE", 3) or 3,
+    "batch_size": _get_env_int("SIMILAR_ENTITY_BATCH_SIZE", 500) or 500,
+    "memory_limit": _get_env_int(
+        "SIMILAR_ENTITY_MEMORY_LIMIT", GDS_MEMORY_LIMIT
+    )
+    or GDS_MEMORY_LIMIT,
+    "top_k": _get_env_int("SIMILAR_ENTITY_TOP_K", 10) or 10,
+}
+
+# ===== 搜索工具配置 =====
+
+BASE_SEARCH_CONFIG = {
+    "cache_max_size": _get_env_int("SEARCH_CACHE_MEMORY_SIZE", 200) or 200,
+    "vector_limit": _get_env_int("SEARCH_VECTOR_LIMIT", 5) or 5,
+    "text_limit": _get_env_int("SEARCH_TEXT_LIMIT", 5) or 5,
+    "semantic_top_k": _get_env_int("SEARCH_SEMANTIC_TOP_K", 5) or 5,
+    "relevance_top_k": _get_env_int("SEARCH_RELEVANCE_TOP_K", 5) or 5,
+}
+
+LOCAL_SEARCH_SETTINGS = {
+    "top_chunks": _get_env_int("LOCAL_SEARCH_TOP_CHUNKS", 3) or 3,
+    "top_communities": _get_env_int("LOCAL_SEARCH_TOP_COMMUNITIES", 3) or 3,
+    "top_outside_relationships": _get_env_int(
+        "LOCAL_SEARCH_TOP_OUTSIDE_RELS", 10
+    )
+    or 10,
+    "top_inside_relationships": _get_env_int(
+        "LOCAL_SEARCH_TOP_INSIDE_RELS", 10
+    )
+    or 10,
+    "top_entities": _get_env_int("LOCAL_SEARCH_TOP_ENTITIES", 10) or 10,
+    "index_name": os.getenv("LOCAL_SEARCH_INDEX_NAME", "vector"),
+}
+
+GLOBAL_SEARCH_SETTINGS = {
+    "default_level": _get_env_int("GLOBAL_SEARCH_LEVEL", 0) or 0,
+    "community_batch_size": _get_env_int("GLOBAL_SEARCH_BATCH_SIZE", 5) or 5,
+}
+
+NAIVE_SEARCH_TOP_K = _get_env_int("NAIVE_SEARCH_TOP_K", 3) or 3
+
+HYBRID_SEARCH_SETTINGS = {
+    "entity_limit": _get_env_int("HYBRID_SEARCH_ENTITY_LIMIT", 15) or 15,
+    "max_hop_distance": _get_env_int("HYBRID_SEARCH_MAX_HOP", 2) or 2,
+    "top_communities": _get_env_int("HYBRID_SEARCH_TOP_COMMUNITIES", 3) or 3,
+    "batch_size": _get_env_int("HYBRID_SEARCH_BATCH_SIZE", 10) or 10,
+    "community_level": _get_env_int("HYBRID_SEARCH_COMMUNITY_LEVEL", 0) or 0,
+}
+
+# ===== Agent 配置 =====
+
+AGENT_SETTINGS = {
+    "default_recursion_limit": _get_env_int("AGENT_RECURSION_LIMIT", 5) or 5,
+    "chunk_size": _get_env_int("AGENT_CHUNK_SIZE", 4) or 4,
+    "stream_flush_threshold": _get_env_int("AGENT_STREAM_FLUSH_THRESHOLD", 40)
+    or 40,
+    "deep_stream_flush_threshold": _get_env_int(
+        "DEEP_AGENT_STREAM_FLUSH_THRESHOLD", 80
+    )
+    or 80,
+    "fusion_stream_flush_threshold": _get_env_int(
+        "FUSION_AGENT_STREAM_FLUSH_THRESHOLD", 60
+    )
+    or 60,
+}
+
+# ===== 多智能体（Plan-Execute-Report）配置 =====
+
+MULTI_AGENT_PLANNER_MAX_TASKS = _get_env_int("MA_PLANNER_MAX_TASKS", 6) or 6
+MULTI_AGENT_ALLOW_UNCLARIFIED_PLAN = _get_env_bool("MA_ALLOW_UNCLARIFIED_PLAN", True)
+MULTI_AGENT_DEFAULT_DOMAIN = os.getenv("MA_DEFAULT_DOMAIN", "通用")
+
+MULTI_AGENT_AUTO_GENERATE_REPORT = _get_env_bool("MA_AUTO_GENERATE_REPORT", True)
+MULTI_AGENT_STOP_ON_CLARIFICATION = _get_env_bool("MA_STOP_ON_CLARIFICATION", True)
+MULTI_AGENT_STRICT_PLAN_SIGNAL = _get_env_bool("MA_STRICT_PLAN_SIGNAL", True)
+
+MULTI_AGENT_DEFAULT_REPORT_TYPE = os.getenv("MA_DEFAULT_REPORT_TYPE", "long_document")
+MULTI_AGENT_ENABLE_CONSISTENCY_CHECK = _get_env_bool(
+    "MA_ENABLE_CONSISTENCY_CHECK", True
+)
+MULTI_AGENT_ENABLE_MAPREDUCE = _get_env_bool("MA_ENABLE_MAPREDUCE", True)
+MULTI_AGENT_MAPREDUCE_THRESHOLD = _get_env_int("MA_MAPREDUCE_THRESHOLD", 20) or 20
+MULTI_AGENT_MAX_TOKENS_PER_REDUCE = (
+    _get_env_int("MA_MAX_TOKENS_PER_REDUCE", 4000) or 4000
+)
+MULTI_AGENT_ENABLE_PARALLEL_MAP = _get_env_bool("MA_ENABLE_PARALLEL_MAP", True)
+
+MULTI_AGENT_SECTION_MAX_EVIDENCE = (
+    _get_env_int("MA_SECTION_MAX_EVIDENCE", 8) or 8
+)
+MULTI_AGENT_SECTION_MAX_CONTEXT_CHARS = (
+    _get_env_int("MA_SECTION_MAX_CONTEXT_CHARS", 800) or 800
+)
+MULTI_AGENT_REFLECTION_ALLOW_RETRY = _get_env_bool(
+    "MA_REFLECTION_ALLOW_RETRY", False
+)
+MULTI_AGENT_REFLECTION_MAX_RETRIES = (
+    _get_env_int("MA_REFLECTION_MAX_RETRIES", 1) or 1
+)

@@ -1,4 +1,4 @@
-from typing import Annotated, Sequence, TypedDict, List, Dict, Any, AsyncGenerator
+from typing import Annotated, Sequence, TypedDict, List, Dict, Any, AsyncGenerator, Optional
 from abc import ABC, abstractmethod
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph import END, StateGraph, START
@@ -16,6 +16,7 @@ from graphrag_agent.cache_manager.manager import (
     HybridCacheBackend
 )
 from graphrag_agent.cache_manager.strategies.global_strategy import GlobalCacheKeyStrategy
+from graphrag_agent.config.settings import AGENT_SETTINGS
 
 class BaseAgent(ABC):
     """Agent 基类，定义通用功能和接口"""
@@ -31,6 +32,11 @@ class BaseAgent(ABC):
         self.llm = get_llm_model()
         self.stream_llm = get_stream_llm_model()
         self.embeddings = get_embeddings_model()
+        self.default_recursion_limit = AGENT_SETTINGS["default_recursion_limit"]
+        self.stream_flush_threshold = AGENT_SETTINGS["stream_flush_threshold"]
+        self.deep_stream_flush_threshold = AGENT_SETTINGS["deep_stream_flush_threshold"]
+        self.fusion_stream_flush_threshold = AGENT_SETTINGS["fusion_stream_flush_threshold"]
+        self.chunk_size = AGENT_SETTINGS["chunk_size"]
         
         self.memory = MemorySaver()
         self.execution_log = []
@@ -146,7 +152,7 @@ class BaseAgent(ABC):
                     buffer += chunks[i]
                     
                     # 当缓冲区包含完整句子或达到合理大小时输出
-                    if (i % 2 == 1) or len(buffer) >= 40:
+                    if (i % 2 == 1) or len(buffer) >= self.stream_flush_threshold:
                         yield buffer
                         buffer = ""
                         await asyncio.sleep(0.01)  # 微小延迟确保流畅显示
@@ -239,9 +245,8 @@ class BaseAgent(ABC):
             content = message.content if hasattr(message, "content") else str(message)
             
             # 模拟流式输出
-            chunk_size = 4  # 每个分块的字符数
-            for i in range(0, len(content), chunk_size):
-                yield content[i:i+chunk_size]
+            for i in range(0, len(content), self.chunk_size):
+                yield content[i:i+self.chunk_size]
                 await asyncio.sleep(0.01)
     
     async def _generate_node_async(self, state):
@@ -342,10 +347,15 @@ class BaseAgent(ABC):
         
         return None
     
-    def ask_with_trace(self, query: str, thread_id: str = "default", recursion_limit: int = 5) -> Dict:
+    def ask_with_trace(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None) -> Dict:
         """执行查询并获取带执行轨迹的回答"""
         overall_start = time.time()
         self.execution_log = []  # 重置执行日志
+        recursion_limit = (
+            recursion_limit
+            if recursion_limit is not None
+            else self.default_recursion_limit
+        )
         
         # 确保查询字符串是干净的
         safe_query = query.strip()
@@ -446,7 +456,7 @@ class BaseAgent(ABC):
                 "execution_log": self.execution_log + [{"node": "error", "timestamp": time.time(), "input": query, "output": str(e)}]
             }
         
-    def ask(self, query: str, thread_id: str = "default", recursion_limit: int = 5):
+    def ask(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None):
         """向Agent提问"""
         overall_start = time.time()
         
@@ -460,11 +470,17 @@ class BaseAgent(ABC):
         # 未命中缓存，执行标准流程
         process_start = time.time()
         
+        recursion_value = (
+            recursion_limit
+            if recursion_limit is not None
+            else self.default_recursion_limit
+        )
+        
         # 正常处理请求
         config = {
             "configurable": {
                 "thread_id": thread_id,
-                "recursion_limit": recursion_limit
+                "recursion_limit": recursion_value
             }
         }
         
@@ -498,7 +514,7 @@ class BaseAgent(ABC):
             print(f"处理查询时出错: {e} ({error_time:.4f}s)")
             return f"抱歉，处理您的问题时遇到了错误。请稍后再试或换一种提问方式。错误详情: {str(e)}"
     
-    async def ask_stream(self, query: str, thread_id: str = "default", recursion_limit: int = 5) -> AsyncGenerator[str, None]:
+    async def ask_stream(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None) -> AsyncGenerator[str, None]:
         """
         向Agent提问，返回流式响应
         
@@ -527,7 +543,7 @@ class BaseAgent(ABC):
                 buffer += chunks[i]
                 
                 # 当缓冲区包含完整句子或达到合理大小时输出
-                if (i % 2 == 1) or len(buffer) >= 40:
+                if (i % 2 == 1) or len(buffer) >= self.stream_flush_threshold:
                     yield buffer
                     buffer = ""
                     await asyncio.sleep(0.01)
@@ -549,7 +565,7 @@ class BaseAgent(ABC):
                 buffer += chunks[i]
                 
                 # 当缓冲区包含完整句子或达到合理大小时输出
-                if (i % 2 == 1) or len(buffer) >= 40:
+                if (i % 2 == 1) or len(buffer) >= self.stream_flush_threshold:
                     yield buffer
                     buffer = ""
                     await asyncio.sleep(0.01)
@@ -577,7 +593,7 @@ class BaseAgent(ABC):
                 buffer += chunks[i]
                 
                 # 当缓冲区包含完整句子或达到合理大小时输出
-                if (i % 2 == 1) or len(buffer) >= 40:
+                if (i % 2 == 1) or len(buffer) >= self.stream_flush_threshold:
                     yield buffer
                     buffer = ""
                     await asyncio.sleep(0.01)
@@ -591,10 +607,15 @@ class BaseAgent(ABC):
             return
         
         # 未命中缓存，执行标准流程
+        recursion_value = (
+            recursion_limit
+            if recursion_limit is not None
+            else self.default_recursion_limit
+        )
         config = {
             "configurable": {
                 "thread_id": thread_id,
-                "recursion_limit": recursion_limit,
+                "recursion_limit": recursion_value,
                 "stream_mode": True  # 指示流式输出模式
             }
         }

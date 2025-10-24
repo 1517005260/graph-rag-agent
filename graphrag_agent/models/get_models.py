@@ -5,60 +5,46 @@ from langchain.callbacks.manager import AsyncCallbackManager
 
 
 import os
-from pathlib import Path
-from dotenv import load_dotenv
 
-# 设置tiktoken缓存避免网络问题
+from graphrag_agent.config.settings import (
+    TIKTOKEN_CACHE_DIR,
+    OPENAI_EMBEDDING_CONFIG,
+    OPENAI_LLM_CONFIG,
+)
+
+
+# 设置 tiktoken 缓存目录，避免每次联网拉取
 def setup_cache():
-    cache_dir = Path.home() / "cache" / "tiktoken"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    os.environ["TIKTOKEN_CACHE_DIR"] = str(cache_dir)
+    TIKTOKEN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    os.environ["TIKTOKEN_CACHE_DIR"] = str(TIKTOKEN_CACHE_DIR)
+
 
 setup_cache()
 
-load_dotenv()
-
 def get_embeddings_model():
-    model = OpenAIEmbeddings(
-        model=os.getenv('OPENAI_EMBEDDINGS_MODEL'),
-        api_key=os.getenv('OPENAI_API_KEY'),
-        base_url=os.getenv('OPENAI_BASE_URL'),
-    )
-    return model
+    config = {k: v for k, v in OPENAI_EMBEDDING_CONFIG.items() if v}
+    return OpenAIEmbeddings(**config)
 
 
 def get_llm_model():
-    model = ChatOpenAI(
-        model=os.getenv('OPENAI_LLM_MODEL'),
-        temperature=os.getenv('TEMPERATURE'),
-        max_tokens=os.getenv('MAX_TOKENS'),
-        api_key=os.getenv('OPENAI_API_KEY'),
-        base_url=os.getenv('OPENAI_BASE_URL'),
-    )
-    return model
+    config = {k: v for k, v in OPENAI_LLM_CONFIG.items() if v is not None and v != ""}
+    return ChatOpenAI(**config)
 
 def get_stream_llm_model():
     callback_handler = AsyncIteratorCallbackHandler()
     # 将回调handler放进AsyncCallbackManager中
     manager = AsyncCallbackManager(handlers=[callback_handler])
 
-    model = ChatOpenAI(
-        model=os.getenv('OPENAI_LLM_MODEL'),
-        temperature=os.getenv('TEMPERATURE'),
-        max_tokens=os.getenv('MAX_TOKENS'),
-        api_key=os.getenv('OPENAI_API_KEY'),
-        base_url=os.getenv('OPENAI_BASE_URL'),
-        streaming=True,
-        callbacks=manager,
-    )
-    return model
+    config = {k: v for k, v in OPENAI_LLM_CONFIG.items() if v is not None and v != ""}
+    config.update({"streaming": True, "callbacks": manager})
+    return ChatOpenAI(**config)
 
 def count_tokens(text):
     """简单通用的token计数"""
     if not text:
         return 0
     
-    model_name = os.getenv('OPENAI_LLM_MODEL', '').lower()
+    model_name = (OPENAI_LLM_CONFIG.get("model") or "").lower()
     
     # 如果是deepseek，使用transformers
     if 'deepseek' in model_name:

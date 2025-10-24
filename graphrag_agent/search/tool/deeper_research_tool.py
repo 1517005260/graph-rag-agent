@@ -29,6 +29,13 @@ from graphrag_agent.search.tool.reasoning.kg_builder import DynamicKnowledgeGrap
 from graphrag_agent.search.tool.reasoning.evidence import EvidenceChainTracker
 from graphrag_agent.search.tool.reasoning.chain_of_exploration import ChainOfExplorationSearcher
 from graphrag_agent.search.tool.reasoning.validator import complexity_estimate
+from graphrag_agent.search.tool.deeper_research import (
+    enhance_search_with_coe,
+    create_multiple_reasoning_branches,
+    detect_and_resolve_contradictions,
+    generate_citations,
+    merge_reasoning_branches,
+)
 
 class DeeperResearchTool:
     """
@@ -145,322 +152,6 @@ class DeeperResearchTool:
         self._keywords_cache[query] = keywords
         return keywords
     
-    def _enhance_search_with_coe(self, query: str, keywords: Dict[str, List[str]]):
-        """
-        使用Chain of Exploration增强搜索
-        
-        Args:
-            query: 用户查询
-            keywords: 关键词字典
-            
-        Returns:
-            Dict: 增强搜索结果
-        """
-        # 添加缓存检查
-        cache_key = f"coe_search:{query}"
-        if hasattr(self, '_coe_cache') and cache_key in self._coe_cache:
-            return self._coe_cache[cache_key]
-        
-        # 获取社区感知上下文
-        community_context = self.community_search.enhance_search(query, keywords)
-        search_strategy = community_context.get("search_strategy", {})
-        
-        # 提取关注实体
-        focus_entities = search_strategy.get("focus_entities", [])
-        if not focus_entities:
-            # 如果没有关注实体，从关键词提取
-            focus_entities = keywords.get("high_level", []) + keywords.get("low_level", [])
-        
-        # 使用Chain of Exploration探索
-        if focus_entities:
-            # 添加缓存检查
-            coe_cache_key = f"coe:{query}:{','.join(focus_entities[:3])}"
-            if hasattr(self, '_specific_coe_cache') and coe_cache_key in self._specific_coe_cache:
-                exploration_results = self._specific_coe_cache[coe_cache_key]
-            else:
-                exploration_results = self.chain_explorer.explore(
-                    query, 
-                    focus_entities[:3],  # 使用前3个关注实体作为起点
-                    max_steps=3
-                )
-                if not hasattr(self, '_specific_coe_cache'):
-                    self._specific_coe_cache = {}
-                self._specific_coe_cache[coe_cache_key] = exploration_results
-            
-            # 将探索结果添加到社区上下文
-            community_context["exploration_results"] = exploration_results
-            
-            # 更新搜索策略
-            discovered_entities = []
-            for step in exploration_results.get("exploration_path", []):
-                if step["step"] > 0:  # 跳过起始实体
-                    discovered_entities.append(step["node_id"])
-            
-            if discovered_entities:
-                search_strategy["discovered_entities"] = discovered_entities
-                community_context["search_strategy"] = search_strategy
-        
-        # 缓存结果
-        if not hasattr(self, '_coe_cache'):
-            self._coe_cache = {}
-        self._coe_cache[cache_key] = community_context
-        
-        return community_context
-    
-    def _create_multiple_reasoning_branches(self, query_id, hypotheses=None):
-        """
-        根据多个假设创建多个推理分支
-        
-        Args:
-            query_id: 查询ID
-            hypotheses: 假设列表
-            
-        Returns:
-            Dict: 包含分支结果的字典
-        """
-        branch_results = {}
-        
-        # 避免重复生成假设
-        if hypotheses is None:
-            # 从query_id获取原始查询
-            original_query = None
-            for query, current_id in self.current_query_context.items():
-                if current_id == query_id:
-                    original_query = query
-                    break
-                    
-            if original_query is None:
-                # 如果找不到原始查询，尝试从思考引擎获取
-                if hasattr(self.thinking_engine, 'query'):
-                    original_query = self.thinking_engine.query
-                else:
-                    # 兜底方案，使用一个空假设列表
-                    self._log(f"\n[分支推理] 无法找到原始查询，无法生成假设")
-                    return {}
-            
-            # 检查假设缓存
-            if not hasattr(self, '_hypotheses_cache'):
-                self._hypotheses_cache = {}
-                
-            if query_id in self._hypotheses_cache:
-                hypotheses = self._hypotheses_cache[query_id]
-            else:
-                # 生成假设并缓存
-                hypotheses = self.query_generator.generate_multiple_hypotheses(original_query, self.llm)
-                self._hypotheses_cache[query_id] = hypotheses
-        
-        # 为每个假设创建一个推理分支
-        for i, hypothesis in enumerate(hypotheses[:3]):  # 限制最多3个分支
-            branch_name = f"branch_{i+1}"
-            
-            # 在思考引擎中创建推理分支
-            self.thinking_engine.branch_reasoning(branch_name)
-            
-            # 记录分支创建
-            self._log(f"\n[分支推理] 创建分支 {branch_name}: {hypothesis}")
-            
-            # 添加推理步骤
-            step_id = self.evidence_tracker.add_reasoning_step(
-                query_id,
-                f"branch_{branch_name}",
-                f"基于假设: {hypothesis} 创建推理分支"
-            )
-            
-            # 记录分支信息
-            self.explored_branches[branch_name] = {
-                "hypothesis": hypothesis,
-                "step_id": step_id,
-                "evidence": []
-            }
-            
-            # 在思考引擎中添加假设作为推理步骤
-            self.thinking_engine.add_reasoning_step(
-                f"探索假设: {hypothesis}"
-            )
-            
-            # 应用反事实分析 - 仅对第一个分支进行
-            if i == 0:
-                # 缓存反事实分析
-                counter_cache_key = f"counter:{query_id}:{hypothesis}"
-                if hasattr(self, '_counter_cache') and counter_cache_key in self._counter_cache:
-                    counter_analysis = self._counter_cache[counter_cache_key]
-                else:
-                    counter_analysis = self.thinking_engine.counter_factual_analysis(
-                        f"假设 {hypothesis} 不成立"
-                    )
-                    if not hasattr(self, '_counter_cache'):
-                        self._counter_cache = {}
-                    self._counter_cache[counter_cache_key] = counter_analysis
-                
-                # 记录反事实分析结果
-                self.evidence_tracker.add_evidence(
-                    step_id,
-                    f"counter_analysis_{i}",
-                    counter_analysis,
-                    "counter_factual_analysis"
-                )
-                
-                # 添加到分支结果
-                branch_results[branch_name] = {
-                    "hypothesis": hypothesis,
-                    "counter_analysis": counter_analysis
-                }
-            else:
-                branch_results[branch_name] = {
-                    "hypothesis": hypothesis
-                }
-        
-        # 返回主分支
-        self.thinking_engine.switch_branch("main")
-        
-        return branch_results
-    
-    def _detect_and_resolve_contradictions(self, query_id):
-        """
-        检测并处理信息矛盾
-        
-        Args:
-            query_id: 查询ID
-            
-        Returns:
-            Dict: 矛盾分析结果
-        """
-        # 添加缓存检查
-        cache_key = f"contradiction:{query_id}"
-        if hasattr(self, '_contradiction_detailed_cache') and cache_key in self._contradiction_detailed_cache:
-            return self._contradiction_detailed_cache[cache_key]
-        
-        # 获取所有已收集的证据
-        all_evidence = []
-        reasoning_chain = self.evidence_tracker.get_reasoning_chain(query_id)
-        
-        for step in reasoning_chain.get("steps", []):
-            step_id = step.get("step_id", "")
-            evidence_ids = step.get("evidence_ids", [])
-            if evidence_ids:
-                all_evidence.extend(evidence_ids)
-        
-        # 检测矛盾
-        contradictions = self.evidence_tracker.detect_contradictions(all_evidence)
-        
-        if contradictions:
-            self._log(f"\n[矛盾检测] 发现 {len(contradictions)} 个矛盾")
-            
-            # 记录矛盾分析
-            contradiction_step_id = self.evidence_tracker.add_reasoning_step(
-                query_id,
-                "contradiction_analysis",
-                f"分析 {len(contradictions)} 个信息矛盾"
-            )
-            
-            # 解析每个矛盾
-            for i, contradiction in enumerate(contradictions):
-                contradiction_type = contradiction.get("type", "unknown")
-                analysis = ""
-                
-                if contradiction_type == "numerical":
-                    analysis = (f"数值矛盾: 在 '{contradiction.get('context', '')}' 中, "
-                            f"发现值 {contradiction.get('value1')} 和 {contradiction.get('value2')}")
-                elif contradiction_type == "semantic":
-                    analysis = f"语义矛盾: {contradiction.get('analysis', '')}"
-                
-                # 记录矛盾证据
-                self.evidence_tracker.add_evidence(
-                    contradiction_step_id,
-                    f"contradiction_{i}",
-                    analysis,
-                    "contradiction_evidence"
-                )
-                
-                self._log(f"\n[矛盾分析] {analysis}")
-            
-            result = {"contradictions": contradictions, "step_id": contradiction_step_id}
-        else:
-            result = {"contradictions": [], "step_id": None}
-        
-        # 缓存结果
-        if not hasattr(self, '_contradiction_detailed_cache'):
-            self._contradiction_detailed_cache = {}
-        self._contradiction_detailed_cache[cache_key] = result
-        
-        return result
-    
-    def _generate_citations(self, answer, query_id):
-        """
-        为答案生成引用标记
-        
-        Args:
-            answer: 原始答案
-            query_id: 查询ID
-            
-        Returns:
-            str: 带引用的答案
-        """
-        # 使用证据链跟踪器生成引用
-        citation_result = self.evidence_tracker.generate_citations(answer)
-        cited_answer = citation_result.get("cited_answer", answer)
-        
-        # 记录引用信息
-        self._log(f"\n[引用生成] 添加了 {len(citation_result.get('citations', []))} 个引用")
-        
-        return cited_answer
-    
-    def _merge_reasoning_branches(self, query_id):
-        """
-        合并多个推理分支的结果
-        
-        Args:
-            query_id: 查询ID
-            
-        Returns:
-            str: 合并后的推理
-        """
-        merged_reasoning = "## 多分支推理结果\n\n"
-        
-        # 获取所有分支名称
-        branch_names = list(self.explored_branches.keys())
-        
-        if not branch_names:
-            return ""
-            
-        # 合并每个分支的结果
-        for branch_name in branch_names:
-            branch_info = self.explored_branches[branch_name]
-            
-            # 获取分支的证据
-            evidence = self.evidence_tracker.get_step_evidence(branch_info["step_id"])
-            
-            # 添加分支概要
-            merged_reasoning += f"### 分支: {branch_name}\n"
-            merged_reasoning += f"假设: {branch_info['hypothesis']}\n\n"
-            
-            # 添加主要证据（最多3条）
-            if evidence:
-                merged_reasoning += "主要发现:\n"
-                for i, ev in enumerate(evidence[:3]):
-                    content = ev.get("content", "")
-                    if len(content) > 200:
-                        content = content[:200] + "..."
-                    merged_reasoning += f"- {content}\n"
-            
-            # 如果有反事实分析，添加结论
-            if "counter_analysis" in branch_info:
-                counter_analysis = branch_info["counter_analysis"]
-                if len(counter_analysis) > 200:
-                    counter_analysis = counter_analysis[:200] + "..."
-                merged_reasoning += f"\n反事实分析: {counter_analysis}\n\n"
-            
-            merged_reasoning += "\n"
-        
-        # 在思考引擎中合并所有分支到主分支
-        for branch_name in branch_names:
-            self.deep_research.thinking_engine.switch_branch(branch_name)
-            self.deep_research.thinking_engine.merge_branches(branch_name, "main")
-        
-        # 确保回到主分支
-        self.deep_research.thinking_engine.switch_branch("main")
-        
-        return merged_reasoning
     
     def thinking(self, query: str) -> Dict[str, Any]:
         """
@@ -521,7 +212,7 @@ class DeeperResearchTool:
             enhanced_context = self._search_cache[search_cache_key]
         else:
             self._log(f"\n[深度研究] 开始社区感知与Chain of Exploration分析")
-            enhanced_context = self._enhance_search_with_coe(query, keywords)
+            enhanced_context = enhance_search_with_coe(self, query, keywords)
             self._search_cache[search_cache_key] = enhanced_context
             
         community_context = enhanced_context
@@ -683,7 +374,7 @@ class DeeperResearchTool:
             
             if hypotheses:
                 # 创建多个推理分支
-                branch_results = self._create_multiple_reasoning_branches(query_id, hypotheses)
+                branch_results = create_multiple_reasoning_branches(self, query_id, hypotheses)
                 
                 # 添加分支概述
                 branch_overview = "\n## 推理分支假设\n"
@@ -845,7 +536,7 @@ class DeeperResearchTool:
                     if query_id in self._contradiction_cache:
                         contradiction_result = self._contradiction_cache[query_id]
                     else:
-                        contradiction_result = self._detect_and_resolve_contradictions(query_id)
+                        contradiction_result = detect_and_resolve_contradictions(self, query_id)
                         self._contradiction_cache[query_id] = contradiction_result
                     
                     if contradiction_result["contradictions"]:
@@ -908,7 +599,7 @@ class DeeperResearchTool:
                     search_keywords = self.extract_keywords(search_query)
                     
                     # 使用Chain of Exploration增强搜索
-                    enhanced_search_context = self._enhance_search_with_coe(search_query, search_keywords)
+                    enhanced_search_context = enhance_search_with_coe(self, search_query, search_keywords)
                     exploration_content = []
                     
                     # 从Chain of Exploration结果中提取内容
@@ -1086,7 +777,7 @@ class DeeperResearchTool:
         # 步骤7: 合并推理分支  
         if self.explored_branches:
             self._log("\n[深度研究] 合并多个推理分支")
-            merged_results = self._merge_reasoning_branches(query_id)
+            merged_results = merge_reasoning_branches(self, query_id)
             
             if merged_results:
                 think += f"\n{merged_results}\n"
@@ -1099,7 +790,7 @@ class DeeperResearchTool:
         if query_id in self._contradiction_cache:
             contradiction_result = self._contradiction_cache[query_id]
         else:
-            contradiction_result = self._detect_and_resolve_contradictions(query_id)
+            contradiction_result = detect_and_resolve_contradictions(self, query_id)
             self._contradiction_cache[query_id] = contradiction_result
             
         if contradiction_result["contradictions"]:
@@ -1234,7 +925,7 @@ class DeeperResearchTool:
                 final_answer = f"<think>{think}</think>\n\n{enhanced_answer}"
                 
                 # 生成引用标记  
-                cited_answer = self._generate_citations(enhanced_answer, query_id)
+                cited_answer = generate_citations(self, enhanced_answer, query_id)
                 
                 # 如果引用生成成功，使用带引用的答案
                 if len(cited_answer) > len(enhanced_answer):
@@ -1484,7 +1175,7 @@ class DeeperResearchTool:
                 reasoning_chain = self.evidence_tracker.get_reasoning_chain(query_id)
                 
                 # 检测矛盾
-                contradiction_result = self._detect_and_resolve_contradictions(query_id)
+                contradiction_result = detect_and_resolve_contradictions(self, query_id)
                 
                 # 生成推理摘要
                 reasoning_summary = self.evidence_tracker.summarize_reasoning(query_id)
@@ -1507,7 +1198,7 @@ class DeeperResearchTool:
     async def _async_enhance_search(self, query, keywords):
         """异步执行社区感知搜索增强"""
         def enhance_wrapper():
-            return self._enhance_search_with_coe(query, keywords)
+            return enhance_search_with_coe(self, query, keywords)
         
         return await asyncio.get_event_loop().run_in_executor(None, enhance_wrapper)
 
@@ -1521,7 +1212,7 @@ class DeeperResearchTool:
     async def _async_detect_contradictions(self, query_id):
         """异步检测矛盾"""
         def detect_wrapper():
-            return self._detect_and_resolve_contradictions(query_id)
+            return detect_and_resolve_contradictions(self, query_id)
         
         return await asyncio.get_event_loop().run_in_executor(None, detect_wrapper)
     
@@ -1811,7 +1502,7 @@ class DeeperResearchTool:
                 yield hypothesis_msg
                 
                 # 创建多个推理分支
-                branch_results = self._create_multiple_reasoning_branches(query_id, hypotheses)
+                branch_results = create_multiple_reasoning_branches(self, query_id, hypotheses)
                 
                 # 对第一个分支应用反事实分析
                 if branch_results and "branch_1" in branch_results:
@@ -2234,7 +1925,7 @@ class DeeperResearchTool:
             self._log(merge_msg)
             yield merge_msg
             
-            merged_results = self._merge_reasoning_branches(query_id)
+            merged_results = merge_reasoning_branches(self, query_id)
             if merged_results:
                 self.deep_research.thinking_engine.add_reasoning_step(merged_results)
                 think += merged_results
@@ -2338,7 +2029,7 @@ class DeeperResearchTool:
                             enhanced_prompt += f"- 子问题{i}: {subq} - 未找到直接相关信息\n"
                 
                 # 添加矛盾分析结果
-                contradiction_result = self._detect_and_resolve_contradictions(query_id)
+                contradiction_result = detect_and_resolve_contradictions(self, query_id)
                 if contradiction_result["contradictions"]:
                     enhanced_prompt += "\n信息矛盾分析：\n"
                     for i, contradiction in enumerate(contradiction_result["contradictions"][:3]):
@@ -2365,7 +2056,7 @@ class DeeperResearchTool:
                 final_answer = f"<think>{think}</think>\n\n{enhanced_answer}"
                 
                 # 生成引用标记
-                cited_answer = self._generate_citations(enhanced_answer, query_id)
+                cited_answer = generate_citations(self, enhanced_answer, query_id)
                 
                 # 如果引用生成成功，使用带引用的答案
                 if len(cited_answer) > len(enhanced_answer):

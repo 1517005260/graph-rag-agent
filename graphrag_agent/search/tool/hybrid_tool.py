@@ -1,6 +1,6 @@
 import time
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 import pandas as pd
 from neo4j import Result
 
@@ -9,8 +9,17 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 from graphrag_agent.config.prompt import LC_SYSTEM_PROMPT
-from graphrag_agent.config.settings import gl_description, response_type
+from graphrag_agent.config.settings import gl_description, response_type, HYBRID_SEARCH_SETTINGS
 from graphrag_agent.search.tool.base import BaseSearchTool
+from graphrag_agent.agents.multi_agent.core.retrieval_result import RetrievalResult
+from graphrag_agent.search.retrieval_adapter import (
+    create_retrieval_metadata,
+    create_retrieval_result,
+    merge_retrieval_results,
+    results_from_entities,
+    results_from_relationships,
+    results_to_payload,
+)
 
 
 class HybridSearchTool(BaseSearchTool):
@@ -22,11 +31,11 @@ class HybridSearchTool(BaseSearchTool):
     def __init__(self):
         """初始化混合搜索工具"""
         # 检索参数
-        self.entity_limit = 15        # 最大检索实体数量
-        self.max_hop_distance = 2     # 最大跳数（关系扩展）
-        self.top_communities = 3      # 检索社区数量
-        self.batch_size = 10          # 批处理大小
-        self.community_level = 0      # 默认社区等级
+        self.entity_limit = HYBRID_SEARCH_SETTINGS["entity_limit"]
+        self.max_hop_distance = HYBRID_SEARCH_SETTINGS["max_hop_distance"]
+        self.top_communities = HYBRID_SEARCH_SETTINGS["top_communities"]
+        self.batch_size = HYBRID_SEARCH_SETTINGS["batch_size"]
+        self.community_level = HYBRID_SEARCH_SETTINGS["community_level"]
         
         # 调用父类构造函数
         super().__init__(cache_dir="./cache/hybrid_search")
@@ -248,7 +257,7 @@ class HybridSearchTool(BaseSearchTool):
             print(f"文本搜索也失败: {e}")
             return []
     
-    def _retrieve_low_level_content(self, query: str, keywords: List[str]) -> str:
+    def _retrieve_low_level_content(self, query: str, keywords: List[str]) -> Tuple[str, List[RetrievalResult]]:
         """
         检索低级内容（具体实体和关系）
         
@@ -257,9 +266,10 @@ class HybridSearchTool(BaseSearchTool):
             keywords: 低级关键词列表
             
         返回:
-            str: 格式化的低级内容
+            Tuple[str, List[RetrievalResult]]: 格式化内容及对应证据
         """
         query_start = time.time()
+        retrieval_results: List[RetrievalResult] = []
         
         # 首先使用关键词查询获取相关实体
         entity_ids = []
@@ -310,7 +320,7 @@ class HybridSearchTool(BaseSearchTool):
         # 如果仍然没有实体，返回空内容
         if not entity_ids:
             self.performance_metrics["query_time"] += time.time() - query_start
-            return "没有找到相关的低级内容。"
+            return "没有找到相关的低级内容。", retrieval_results
         
         # 获取实体信息 - 不使用多跳关系以避免复杂查询
         entity_query = """
@@ -376,18 +386,52 @@ class HybridSearchTool(BaseSearchTool):
                 entities = entity_results.iloc[0]['entities']
                 if entities:
                     low_level.append("### 相关实体")
+                    entity_dicts: List[Dict[str, Any]] = []
                     for entity in entities:
                         entity_desc = f"- **{entity['id']}** ({entity['type']}): {entity['description']}"
                         low_level.append(entity_desc)
+                        entity_dicts.append(
+                            {
+                                "id": entity["id"],
+                                "description": entity["description"],
+                                "confidence": 0.65,
+                                "type": entity["type"],
+                            }
+                        )
+                    retrieval_results.extend(
+                        results_from_entities(
+                            entity_dicts,
+                            source="hybrid_search",
+                            confidence=0.65,
+                        )
+                    )
             
             # 添加关系信息
             if not relation_results.empty and 'relationships' in relation_results.columns:
                 relationships = relation_results.iloc[0]['relationships']
                 if relationships:
                     low_level.append("\n### 实体关系")
+                    relationship_dicts: List[Dict[str, Any]] = []
                     for rel in relationships:
                         rel_desc = f"- **{rel['start']}** -{rel['type']}-> **{rel['end']}**: {rel['description']}"
                         low_level.append(rel_desc)
+                        relationship_dicts.append(
+                            {
+                                "start": rel["start"],
+                                "end": rel["end"],
+                                "type": rel["type"],
+                                "description": rel.get("description", ""),
+                                "confidence": 0.6,
+                                "weight": 0.6,
+                            }
+                        )
+                    retrieval_results.extend(
+                        results_from_relationships(
+                            relationship_dicts,
+                            source="hybrid_search",
+                            confidence=0.6,
+                        )
+                    )
             
             # 添加文本块信息
             if not chunk_results.empty and 'chunks' in chunk_results.columns:
@@ -397,17 +441,31 @@ class HybridSearchTool(BaseSearchTool):
                     for chunk in chunks:
                         chunk_text = f"- ID: {chunk['id']}\n  内容: {chunk['text']}"
                         low_level.append(chunk_text)
+                        retrieval_results.append(
+                            create_retrieval_result(
+                                evidence=chunk.get("text", ""),
+                                source="hybrid_search",
+                                granularity="Chunk",
+                                metadata=create_retrieval_metadata(
+                                    source_id=str(chunk.get("id")),
+                                    source_type="chunk",
+                                    confidence=0.7,
+                                    extra={"raw_chunk": chunk},
+                                ),
+                                score=0.7,
+                            )
+                        )
             
             if not low_level:
-                return "没有找到相关的低级内容。"
+                return "没有找到相关的低级内容。", retrieval_results
                 
-            return "\n".join(low_level)
+            return "\n".join(low_level), retrieval_results
         except Exception as e:
             self.performance_metrics["query_time"] += time.time() - query_start
             print(f"实体查询失败: {e}")
-            return "查询实体信息时出错。"
+            return "查询实体信息时出错。", retrieval_results
     
-    def _retrieve_high_level_content(self, query: str, keywords: List[str]) -> str:
+    def _retrieve_high_level_content(self, query: str, keywords: List[str]) -> Tuple[str, List[RetrievalResult]]:
         """
         检索高级内容（社区和主题概念）
         
@@ -416,9 +474,10 @@ class HybridSearchTool(BaseSearchTool):
             keywords: 高级关键词列表
             
         返回:
-            str: 格式化的高级内容
+            Tuple[str, List[RetrievalResult]]: 格式化内容及对应证据
         """
         query_start = time.time()
+        retrieval_results: List[RetrievalResult] = []
         
         # 构建关键词条件
         keyword_conditions = []
@@ -458,7 +517,7 @@ class HybridSearchTool(BaseSearchTool):
             
             # 处理结果
             if community_results.empty:
-                return "没有找到相关的高级内容。"
+                return "没有找到相关的高级内容。", retrieval_results
                 
             # 构建格式化的高级内容
             high_level = ["### 相关主题概念"]
@@ -466,22 +525,31 @@ class HybridSearchTool(BaseSearchTool):
             for _, row in community_results.iterrows():
                 community_desc = f"- **社区 {row['id']}**:\n  {row['summary']}"
                 high_level.append(community_desc)
+                retrieval_results.append(
+                    create_retrieval_result(
+                        evidence=row.get("summary", ""),
+                        source="hybrid_search",
+                        granularity="DO",
+                        metadata=create_retrieval_metadata(
+                            source_id=str(row.get("id")),
+                            source_type="community",
+                            confidence=0.6,
+                            community_id=str(row.get("id")),
+                            extra={"raw_community": row.to_dict()},
+                        ),
+                        score=0.6,
+                    )
+                )
             
-            return "\n".join(high_level)
+            return "\n".join(high_level), retrieval_results
         except Exception as e:
             self.performance_metrics["query_time"] += time.time() - query_start
             print(f"社区查询失败: {e}")
-            return "查询社区信息时出错。"
+            return "查询社区信息时出错。", retrieval_results
     
-    def search(self, query_input: Any) -> str:
+    def structured_search(self, query_input: Any) -> Dict[str, Any]:
         """
-        执行混合搜索，结合低级和高级内容
-        
-        参数:
-            query_input: 字符串查询或包含查询和关键词的字典
-            
-        返回:
-            str: 生成的最终答案
+        执行混合搜索，返回包含证据与答案的结构化结果。
         """
         overall_start = time.time()
         
@@ -508,21 +576,21 @@ class HybridSearchTool(BaseSearchTool):
             )
             
         cached_result = self.cache_manager.get(cache_key)
-        if cached_result:
+        if isinstance(cached_result, dict):
             return cached_result
         
         try:
             # 1. 检索低级内容（实体和关系）
-            low_level_content = self._retrieve_low_level_content(query, low_keywords)
+            low_level_content, low_evidence = self._retrieve_low_level_content(query, low_keywords)
             
             # 2. 检索高级内容（社区和主题）
-            high_level_content = self._retrieve_high_level_content(query, high_keywords)
+            high_level_content, high_evidence = self._retrieve_high_level_content(query, high_keywords)
             
             # 3. 生成最终答案
             llm_start = time.time()
             
             # 调用LLM生成最终答案
-            result = self.query_chain.invoke({
+            answer = self.query_chain.invoke({
                 "query": query,
                 "low_level": low_level_content,
                 "high_level": high_level_content,
@@ -531,24 +599,51 @@ class HybridSearchTool(BaseSearchTool):
             
             self.performance_metrics["llm_time"] += time.time() - llm_start
             
+            all_evidence = merge_retrieval_results(low_evidence, high_evidence)
+            structured_result = {
+                "query": query,
+                "low_level_content": low_level_content,
+                "high_level_content": high_level_content,
+                "final_answer": answer if answer else "未找到相关信息",
+                "retrieval_results": results_to_payload(all_evidence),
+            }
+            
             # 缓存结果
             self.cache_manager.set(
-                query, 
-                result, 
+                cache_key, 
+                structured_result, 
                 low_level_keywords=low_keywords,
                 high_level_keywords=high_keywords
             )
             
             self.performance_metrics["total_time"] = time.time() - overall_start
 
-            if not result:
-                return "未找到相关信息"
-            return result
+            return structured_result
             
         except Exception as e:
             error_msg = f"搜索过程中出现错误: {str(e)}"
             print(error_msg)
-            return error_msg
+            return {
+                "query": query,
+                "low_level_content": "",
+                "high_level_content": "",
+                "final_answer": error_msg,
+                "retrieval_results": [],
+                "error": error_msg,
+            }
+    
+    def search(self, query_input: Any) -> str:
+        """
+        执行混合搜索，结合低级和高级内容
+        
+        参数:
+            query_input: 字符串查询或包含查询和关键词的字典
+            
+        返回:
+            str: 生成的最终答案
+        """
+        structured = self.structured_search(query_input)
+        return structured.get("final_answer", "未找到相关信息")
     
     def get_global_tool(self) -> BaseTool:
         """

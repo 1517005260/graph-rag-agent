@@ -1,9 +1,8 @@
-import os
 from typing import Dict, Any
 import pandas as pd
 from neo4j import GraphDatabase, Result
 from langchain_neo4j import Neo4jGraph
-from dotenv import load_dotenv
+from graphrag_agent.config.settings import NEO4J_CONFIG
 
 
 class DBConnectionManager:
@@ -22,18 +21,17 @@ class DBConnectionManager:
         if self._initialized:
             return
             
-        # 加载环境变量
-        load_dotenv()
-        
-        # 从环境变量获取连接信息
-        self.neo4j_uri = os.getenv('NEO4J_URI')
-        self.neo4j_username = os.getenv('NEO4J_USERNAME')
-        self.neo4j_password = os.getenv('NEO4J_PASSWORD')
+        # 从统一设置中获取连接信息
+        self.neo4j_uri = NEO4J_CONFIG["uri"]
+        self.neo4j_username = NEO4J_CONFIG["username"]
+        self.neo4j_password = NEO4J_CONFIG["password"]
+        self.max_pool_size = NEO4J_CONFIG["max_pool_size"]
         
         # 初始化Neo4j驱动
         self.driver = GraphDatabase.driver(
             self.neo4j_uri,
-            auth=(self.neo4j_username, self.neo4j_password)
+            auth=(self.neo4j_username, self.neo4j_password),
+            max_connection_pool_size=self.max_pool_size
         )
         
         # 初始化LangChain Neo4j图实例
@@ -41,12 +39,11 @@ class DBConnectionManager:
             url=self.neo4j_uri,
             username=self.neo4j_username,
             password=self.neo4j_password,
-            refresh_schema=False,
+            refresh_schema=NEO4J_CONFIG["refresh_schema"],
         )
         
         # 连接池配置
         self.session_pool = []
-        self.max_pool_size = 10
         
         # 标记为已初始化
         self._initialized = True

@@ -1,14 +1,15 @@
 import numpy as np
-import os
 from abc import ABC, abstractmethod
 from typing import List, Union
 from sentence_transformers import SentenceTransformer
 import threading
 from pathlib import Path
-from dotenv import load_dotenv
 
-# 加载环境变量
-load_dotenv()
+from graphrag_agent.config.settings import (
+    MODEL_CACHE_DIR,
+    CACHE_EMBEDDING_PROVIDER,
+    CACHE_SENTENCE_TRANSFORMER_MODEL,
+)
 
 
 class EmbeddingProvider(ABC):
@@ -98,14 +99,14 @@ class SentenceTransformerEmbedding(EmbeddingProvider):
 
         # 设置模型缓存目录
         if cache_dir is None:
-            cache_root = os.getenv('MODEL_CACHE_ROOT', './cache')
-            cache_dir = os.path.join(cache_root, 'model')
+            cache_dir = MODEL_CACHE_DIR
 
         # 确保缓存目录存在
-        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+        cache_path = Path(cache_dir)
+        cache_path.mkdir(parents=True, exist_ok=True)
 
         # 加载模型，指定缓存目录
-        self.model = SentenceTransformer(model_name, cache_folder=cache_dir)
+        self.model = SentenceTransformer(model_name, cache_folder=str(cache_path))
         self._dimension = None
         self._initialized = True
 
@@ -128,13 +129,11 @@ class SentenceTransformerEmbedding(EmbeddingProvider):
 
 def get_cache_embedding_provider() -> EmbeddingProvider:
     """根据配置获取缓存向量提供者"""
-    provider_type = os.getenv('CACHE_EMBEDDING_PROVIDER', 'sentence_transformer').lower()
+    provider_type = CACHE_EMBEDDING_PROVIDER
 
     if provider_type == 'openai':
         return OpenAIEmbeddingProvider()
     else:
         # 使用sentence transformer
-        model_name = os.getenv('CACHE_SENTENCE_TRANSFORMER_MODEL', 'all-MiniLM-L6-v2')
-        cache_root = os.getenv('MODEL_CACHE_ROOT', './cache')
-        cache_dir = os.path.join(cache_root, 'model')
-        return SentenceTransformerEmbedding(model_name=model_name, cache_dir=cache_dir)
+        model_name = CACHE_SENTENCE_TRANSFORMER_MODEL
+        return SentenceTransformerEmbedding(model_name=model_name, cache_dir=MODEL_CACHE_DIR)

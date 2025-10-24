@@ -18,7 +18,7 @@ from graphrag_agent.community import CommunitySummarizerFactory
 from graphdatascience import GraphDataScience
 
 from graphrag_agent.config.neo4jdb import get_db_manager
-from graphrag_agent.config.settings import MAX_WORKERS, ENTITY_BATCH_SIZE, GDS_MEMORY_LIMIT
+from graphrag_agent.config.settings import MAX_WORKERS, ENTITY_BATCH_SIZE, GDS_MEMORY_LIMIT, NEO4J_CONFIG
 
 import shutup
 shutup.please()
@@ -77,8 +77,8 @@ class IndexCommunityBuilder:
             
             # 初始化图数据库连接
             self.gds = GraphDataScience(
-                os.environ["NEO4J_URI"],
-                auth=(os.environ["NEO4J_USERNAME"], os.environ["NEO4J_PASSWORD"])
+                NEO4J_CONFIG["uri"],
+                auth=(NEO4J_CONFIG["username"], NEO4J_CONFIG["password"])
             )
             db_manager = get_db_manager()
             self.graph = db_manager.graph

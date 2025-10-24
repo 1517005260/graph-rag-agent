@@ -1,5 +1,4 @@
 import time
-import os
 from typing import Any, Dict, Optional, Callable
 from pathlib import Path
 
@@ -8,11 +7,7 @@ from .backends import CacheStorageBackend, MemoryCacheBackend, HybridCacheBacken
 from .models import CacheItem
 from .vector_similarity import VectorSimilarityMatcher, get_cache_embedding_provider
 
-from graphrag_agent.config.settings import similarity_threshold as st
-from dotenv import load_dotenv
-
-# 加载环境变量
-load_dotenv()
+from graphrag_agent.config.settings import CACHE_SETTINGS
 
 
 class CacheManager:
@@ -21,14 +16,14 @@ class CacheManager:
     def __init__(self, 
                  key_strategy: CacheKeyStrategy = None, 
                  storage_backend: CacheStorageBackend = None,
-                 cache_dir: str = "./cache",
-                 memory_only: bool = False,
-                 max_memory_size: int = 100,
-                 max_disk_size: int = 1000,
-                 thread_safe: bool = True,
-                 enable_vector_similarity: bool = True,
-                 similarity_threshold: float = st,
-                 max_vectors: int = 10000):
+                 cache_dir: Optional[str] = None,
+                 memory_only: Optional[bool] = None,
+                 max_memory_size: Optional[int] = None,
+                 max_disk_size: Optional[int] = None,
+                 thread_safe: Optional[bool] = None,
+                 enable_vector_similarity: Optional[bool] = None,
+                 similarity_threshold: Optional[float] = None,
+                 max_vectors: Optional[int] = None):
         """
         初始化缓存管理器
         
@@ -44,8 +39,27 @@ class CacheManager:
             similarity_threshold: 向量相似度阈值
             max_vectors: 最大向量数量
         """
-       # 设置缓存键策略
+        # 设置缓存键策略
         self.key_strategy = key_strategy or SimpleCacheKeyStrategy()
+
+        # 从统一配置中获取默认值
+        cache_config = CACHE_SETTINGS
+        cache_dir = cache_dir or str(cache_config["dir"])
+        memory_only = cache_config["memory_only"] if memory_only is None else memory_only
+        max_memory_size = cache_config["max_memory_size"] if max_memory_size is None else max_memory_size
+        max_disk_size = cache_config["max_disk_size"] if max_disk_size is None else max_disk_size
+        thread_safe = cache_config["thread_safe"] if thread_safe is None else thread_safe
+        enable_vector_similarity = (
+            cache_config["enable_vector_similarity"]
+            if enable_vector_similarity is None
+            else enable_vector_similarity
+        )
+        similarity_threshold = (
+            cache_config["similarity_threshold"]
+            if similarity_threshold is None
+            else similarity_threshold
+        )
+        max_vectors = cache_config["max_vectors"] if max_vectors is None else max_vectors
         
         # 设置存储后端
         backend = self._create_storage_backend(
