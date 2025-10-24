@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Optional, Iterable, Tuple
 import hashlib
 import json
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from pydantic import BaseModel, Field
@@ -221,6 +222,12 @@ class BaseReporter:
             except Exception as exc:  # noqa: BLE001
                 _LOGGER.warning("一致性检查失败: %s", exc)
 
+        final_report = self._append_evidence_annex(
+            final_report,
+            evidence_map,
+            used_evidence_ids,
+        )
+
         references = self._format_references(evidence_map, used_evidence_ids)
 
         report_result = ReportResult(
@@ -343,15 +350,24 @@ class BaseReporter:
                 cached_section,
                 evidence_fingerprint,
             ):
+                sanitized_content = self._sanitize_section_text(
+                    section.title,
+                    cached_section["content"],
+                )
+                sanitized_content, normalized_ids = self._normalize_section_references(
+                    sanitized_content,
+                    cached_section["used_evidence_ids"],
+                    evidence_map,
+                )
                 section_contents.append(
                     SectionContent(
                         section_id=section.section_id,
                         title=section.title,
-                        content=cached_section["content"],
-                        used_evidence_ids=list(cached_section["used_evidence_ids"]),
+                        content=sanitized_content,
+                        used_evidence_ids=normalized_ids,
                     )
                 )
-                used_evidence_ids.extend(cached_section["used_evidence_ids"])
+                used_evidence_ids.extend(normalized_ids)
                 continue
 
             draft = self._section_writer.write_section(
@@ -360,15 +376,21 @@ class BaseReporter:
                 evidence_map=evidence_map,
                 fallback_evidence_ids=fallback_evidence_ids,
             )
+            sanitized_content = self._sanitize_section_text(section.title, draft.content)
+            sanitized_content, normalized_ids = self._normalize_section_references(
+                sanitized_content,
+                draft.used_evidence_ids,
+                evidence_map,
+            )
             section_contents.append(
                 SectionContent(
                     section_id=section.section_id,
                     title=section.title,
-                    content=draft.content,
-                    used_evidence_ids=draft.used_evidence_ids,
+                    content=sanitized_content,
+                    used_evidence_ids=normalized_ids,
                 )
             )
-            used_evidence_ids.extend(draft.used_evidence_ids)
+            used_evidence_ids.extend(normalized_ids)
 
         return section_contents, used_evidence_ids
 
@@ -394,15 +416,24 @@ class BaseReporter:
                 cached_section,
                 evidence_fingerprint,
             ):
+                sanitized_content = self._sanitize_section_text(
+                    section.title,
+                    cached_section["content"],
+                )
+                sanitized_content, normalized_ids = self._normalize_section_references(
+                    sanitized_content,
+                    cached_section["used_evidence_ids"],
+                    evidence_map,
+                )
                 section_contents.append(
                     SectionContent(
                         section_id=section.section_id,
                         title=section.title,
-                        content=cached_section["content"],
-                        used_evidence_ids=list(cached_section["used_evidence_ids"]),
+                        content=sanitized_content,
+                        used_evidence_ids=normalized_ids,
                     )
                 )
-                all_used_ids.extend(cached_section["used_evidence_ids"])
+                all_used_ids.extend(normalized_ids)
                 continue
 
             evidence_entries = self._collect_section_evidence(
@@ -435,15 +466,22 @@ class BaseReporter:
                     if evidence_id not in used_ids:
                         used_ids.append(evidence_id)
 
+            sanitized_content = self._sanitize_section_text(section.title, section_text.strip())
+            sanitized_content, normalized_ids = self._normalize_section_references(
+                sanitized_content,
+                used_ids,
+                evidence_map,
+            )
+
             section_contents.append(
                 SectionContent(
                     section_id=section.section_id,
                     title=section.title,
-                    content=section_text.strip(),
-                    used_evidence_ids=used_ids,
+                    content=sanitized_content,
+                    used_evidence_ids=normalized_ids,
                 )
             )
-            all_used_ids.extend(used_ids)
+            all_used_ids.extend(normalized_ids)
 
         return section_contents, all_used_ids
 
@@ -582,6 +620,111 @@ class BaseReporter:
                 f"{snippet}"
             )
         return "\n".join(lines)
+
+    def _append_evidence_annex(
+        self,
+        report: str,
+        evidence_map: Dict[str, RetrievalResult],
+        used_evidence_ids: List[str],
+        *,
+        snippet_length: int = 200,
+    ) -> str:
+        """
+        在报告末尾追加证据附录，列出使用到的证据ID与原文片段
+        """
+        if not evidence_map or not used_evidence_ids:
+            return report
+
+        unique_ids: List[str] = []
+        for eid in used_evidence_ids:
+            if eid in evidence_map and eid not in unique_ids:
+                unique_ids.append(eid)
+
+        if not unique_ids:
+            return report
+
+        annex_entries: List[Dict[str, Any]] = []
+        for eid in unique_ids:
+            result = evidence_map.get(eid)
+            if result is None:
+                continue
+            snippet: str
+            if isinstance(result.evidence, str):
+                snippet = result.evidence.replace("\n", " ").strip()
+            elif isinstance(result.evidence, dict):
+                snippet = json.dumps(result.evidence, ensure_ascii=False)
+            else:
+                snippet = str(result.evidence)
+            snippet = snippet[:snippet_length]
+
+            entry: Dict[str, Any] = {
+                "id": eid,
+                "source": result.source,
+                "source_id": getattr(result.metadata, "source_id", ""),
+                "granularity": result.granularity,
+                "snippet": snippet,
+            }
+            confidence = getattr(result.metadata, "confidence", None)
+            if confidence is not None:
+                entry["confidence"] = round(confidence, 3)
+            annex_entries.append(entry)
+
+        if not annex_entries:
+            return report
+
+        annex_json = json.dumps(annex_entries, ensure_ascii=False, indent=2)
+        annex_block = (
+            "\n\n## 证据附录\n"
+            "```json\n"
+            f"{annex_json}\n"
+            "```\n"
+        )
+        return report.rstrip() + annex_block
+
+    @staticmethod
+    def _normalize_heading_text(text: str) -> str:
+        normalized = re.sub(r"[#\s]+", "", (text or "")).replace("：", ":").replace("，", ",")
+        return normalized.strip().lower()
+
+    def _sanitize_section_text(self, title: str, content: str) -> str:
+        if not content:
+            return ""
+        normalized_title = self._normalize_heading_text(title)
+        cleaned_lines: List[str] = []
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                heading_text = re.sub(r"^#+\s*", "", stripped)
+                if self._normalize_heading_text(heading_text) == normalized_title:
+                    continue
+            cleaned_lines.append(line)
+        while cleaned_lines and not cleaned_lines[0].strip():
+            cleaned_lines.pop(0)
+        return "\n".join(cleaned_lines).strip()
+
+    def _normalize_section_references(
+        self,
+        content: str,
+        candidate_ids: Iterable[str],
+        evidence_map: Dict[str, RetrievalResult],
+    ) -> tuple[str, List[str]]:
+        valid_ids: List[str] = []
+
+        def replacer(match: re.Match[str]) -> str:
+            evidence_id = match.group(1).strip()
+            if evidence_id in evidence_map:
+                if evidence_id not in valid_ids:
+                    valid_ids.append(evidence_id)
+                return match.group(0)
+            return ""
+
+        sanitized = re.sub(r"\[证据ID[:：]\s*([A-Za-z0-9\-]+)\]", replacer, content or "")
+
+        candidate_order = [
+            eid for eid in candidate_ids if eid in evidence_map and eid not in valid_ids
+        ]
+        ordered_ids = valid_ids + candidate_order
+        return sanitized.strip(), ordered_ids
 
     def _format_references(
         self,

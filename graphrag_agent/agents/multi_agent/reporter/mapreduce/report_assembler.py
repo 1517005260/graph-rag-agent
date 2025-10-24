@@ -37,15 +37,26 @@ class ReportAssembler:
         global_context = global_context or {}
 
         terminology = self._extract_global_terminology(section_contents)
-        introduction = self._generate_introduction(outline, section_contents, global_context)
-        conclusion = self._generate_conclusion(outline, section_contents, global_context)
+        introduction_needed = not self._has_intro_section(outline)
+        conclusion_needed = not self._has_conclusion_section(outline)
+        introduction = (
+            self._generate_introduction(outline, section_contents, global_context)
+            if introduction_needed
+            else ""
+        )
+        conclusion = (
+            self._generate_conclusion(outline, section_contents, global_context)
+            if conclusion_needed
+            else ""
+        )
 
         parts = [f"# {outline.title}"]
 
         if outline.report_type == "long_document" and outline.abstract:
             parts.extend(["", "## 摘要", outline.abstract.strip()])
 
-        parts.extend(["", "## 引言", introduction.strip()])
+        if introduction_needed and introduction.strip():
+            parts.extend(["", "## 引言", introduction.strip()])
 
         for section in outline.sections:
             content = section_contents.get(section.section_id, "").strip()
@@ -53,7 +64,8 @@ class ReportAssembler:
                 continue
             parts.extend(["", f"## {section.title}", content])
 
-        parts.extend(["", "## 结论", conclusion.strip()])
+        if conclusion_needed and conclusion.strip():
+            parts.extend(["", "## 结论", conclusion.strip()])
 
         if terminology:
             parts.extend(["", "## 术语表", self._format_terminology(terminology)])
@@ -96,6 +108,20 @@ class ReportAssembler:
             section_summaries=section_summaries,
         )
         return self._invoke_llm(prompt)
+
+    @staticmethod
+    def _has_intro_section(outline: ReportOutline) -> bool:
+        if not outline.sections:
+            return False
+        title = outline.sections[0].title.lower()
+        return any(keyword in title for keyword in ("引言", "introduction"))
+
+    @staticmethod
+    def _has_conclusion_section(outline: ReportOutline) -> bool:
+        if not outline.sections:
+            return False
+        title = outline.sections[-1].title.lower()
+        return any(keyword in title for keyword in ("结论", "conclusion", "总结"))
 
     def _generate_conclusion(
         self,

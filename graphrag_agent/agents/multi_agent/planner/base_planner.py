@@ -3,9 +3,10 @@ Planner编排基类
 
 整合Clarifier、TaskDecomposer、PlanReviewer，输出结构化的PlanSpec
 """
-from typing import Optional, List
+from typing import Optional, List, Set
 from datetime import datetime
 import logging
+import uuid
 
 from pydantic import BaseModel, Field
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -17,6 +18,7 @@ from graphrag_agent.agents.multi_agent.core.state import (
 from graphrag_agent.agents.multi_agent.core.plan_spec import (
     PlanSpec,
     PlanExecutionSignal,
+    TaskNode,
 )
 from graphrag_agent.agents.multi_agent.planner.clarifier import (
     Clarifier,
@@ -35,6 +37,7 @@ from graphrag_agent.config.settings import (
     MULTI_AGENT_PLANNER_MAX_TASKS,
     MULTI_AGENT_ALLOW_UNCLARIFIED_PLAN,
     MULTI_AGENT_DEFAULT_DOMAIN,
+    MULTI_AGENT_REFLECTION_ALLOW_RETRY,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -169,6 +172,7 @@ class BasePlanner:
         )
 
         plan_spec = review_outcome.plan_spec
+        self._ensure_reflection_task(plan_spec)
         # 将生成的计划写回状态
         state.plan = plan_spec
         state.plan_context = context
@@ -183,6 +187,43 @@ class BasePlanner:
             review_outcome=review_outcome,
             executor_signal=executor_signal,
         )
+
+    def _ensure_reflection_task(self, plan_spec: Optional[PlanSpec]) -> None:
+        """
+        若配置允许反思且当前计划未包含反思节点，则自动附加一个反思任务。
+        """
+        if not MULTI_AGENT_REFLECTION_ALLOW_RETRY:
+            return
+        if plan_spec is None or plan_spec.task_graph is None:
+            return
+
+        task_graph = plan_spec.task_graph
+        if any(node.task_type == "reflection" for node in task_graph.nodes):
+            return
+
+        sink_ids: Set[str] = {node.task_id for node in task_graph.nodes}
+        for node in task_graph.nodes:
+            for dep in node.depends_on:
+                sink_ids.discard(dep)
+
+        depends_on = [task_id for task_id in sink_ids if task_id]
+        if not depends_on and task_graph.nodes:
+            depends_on = [task_graph.nodes[-1].task_id]
+
+        reflection_node = TaskNode(
+            task_id=f"task_reflection_{uuid.uuid4().hex[:6]}",
+            task_type="reflection",
+            description="复核整体答案并提出改进建议",
+            priority=3,
+            depends_on=depends_on,
+        )
+
+        task_graph.nodes.append(reflection_node)
+        try:
+            task_graph.validate_dependencies()
+        except ValueError as exc:  # noqa: BLE001
+            task_graph.nodes.pop()
+            _LOGGER.warning("反思节点插入失败，保持原计划: %s", exc)
 
     def _ensure_plan_context(self, state: PlanExecuteState) -> PlanContext:
         """

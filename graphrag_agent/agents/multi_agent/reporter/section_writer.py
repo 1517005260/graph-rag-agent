@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Optional, Iterable
 import logging
 import textwrap
 import json
+import re
 
 from pydantic import BaseModel, Field
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -133,6 +134,7 @@ class SectionWriter:
             used_ids.extend([item.result_id for item in batch])
 
         final_content = "\n\n".join(contents).strip()
+        final_content = self._sanitize_content(section.title, final_content)
         return SectionDraft(
             section_id=section.section_id,
             content=final_content,
@@ -197,6 +199,40 @@ class SectionWriter:
         message: BaseMessage = self._llm.invoke(prompt)  # type: ignore[assignment]
         content = getattr(message, "content", None) or str(message)
         return content.strip()
+
+    @staticmethod
+    def _normalize_heading_text(text: str) -> str:
+        """
+        归一化标题文本，便于比对是否与章节标题重复
+        """
+        normalized = re.sub(r"[#\s]+", "", text or "").strip()
+        normalized = normalized.replace("：", ":").replace("，", ",").lower()
+        return normalized
+
+    def _sanitize_content(self, section_title: str, content: str) -> str:
+        """
+        移除与章节标题重复的标题行，避免最终报告出现双重小标题
+        """
+        if not content:
+            return ""
+
+        normalized_title = self._normalize_heading_text(section_title)
+        cleaned_lines: List[str] = []
+
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                heading_text = re.sub(r"^#+\s*", "", stripped)
+                if self._normalize_heading_text(heading_text) == normalized_title:
+                    # 跳过重复标题行
+                    continue
+            cleaned_lines.append(line)
+
+        # 去除开头的空行，保持章节正文紧凑
+        while cleaned_lines and not cleaned_lines[0].strip():
+            cleaned_lines.pop(0)
+
+        return "\n".join(cleaned_lines).strip()
 
     def _build_outline_snapshot(
         self,

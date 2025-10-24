@@ -6,6 +6,8 @@
 from typing import Any, Dict, Optional, List
 import time
 import logging
+import json
+import re
 
 from graphrag_agent.agents.multi_agent.core.execution_record import (
     ExecutionMetadata,
@@ -81,11 +83,16 @@ class ResearchExecutor(BaseExecutor):
             latency_ms=round(latency * 1000, 3),
         )
 
-        evidence = (
-            self._wrap_research_evidence(state, task, tool_name, result_payload)
-            if success
-            else []
-        )
+        answer_text = ""
+        references: List[str] = []
+        evidence: List[RetrievalResult] = []
+        if success:
+            evidence, answer_text, references = self._wrap_research_output(
+                state,
+                task,
+                tool_name,
+                result_payload,
+            )
 
         metadata = ExecutionMetadata(
             worker_type=self.worker_type,
@@ -94,6 +101,7 @@ class ResearchExecutor(BaseExecutor):
             evidence_count=len(evidence),
             environment={
                 "execution_mode": signal.execution_mode,
+                "references": references,
             },
         )
 
@@ -110,7 +118,16 @@ class ResearchExecutor(BaseExecutor):
             metadata=metadata,
         )
 
-        self._update_state(state, task, record, success, error_message, result_payload)
+        self._update_state(
+            state,
+            task,
+            record,
+            success,
+            error_message,
+            result_payload,
+            answer_text,
+            references,
+        )
 
         return TaskExecutionResult(record=record, success=success, error=error_message)
 
@@ -121,40 +138,56 @@ class ResearchExecutor(BaseExecutor):
             self._tool_cache[task_type] = TOOL_REGISTRY[task_type]()
         return self._tool_cache[task_type]
 
-    def _wrap_research_evidence(
+    def _wrap_research_output(
         self,
         state: PlanExecuteState,
         task: TaskNode,
         tool_name: str,
         result_payload: Any,
-    ) -> List[RetrievalResult]:
+    ) -> tuple[List[RetrievalResult], str, List[str]]:
         """
-        将研究结果包装成RetrievalResult，便于Reporter引用。
+        将研究结果包装成RetrievalResult并提取核心答案与引用，便于Reporter引用。
         """
-        if isinstance(result_payload, dict):
-            # 若工具已经返回结构化数据，则尝试直接读取
-            textual = result_payload.get("answer") or result_payload.get("summary") or str(result_payload)
-        else:
-            textual = str(result_payload or "")
+        answer_text = self._extract_answer_text(result_payload)
+        reference_ids = self._extract_reference_ids(result_payload, answer_text)
 
         metadata = RetrievalMetadata(
             source_id=f"{task.task_id}:{tool_name}",
             source_type="document",
             confidence=0.65,
+            extra={"references": reference_ids} if reference_ids else {},
         )
         result = RetrievalResult(
             granularity="DO",
-            evidence=textual,
+            evidence=answer_text or "（深度研究未返回结构化文本，仅提供推理概要）",
             metadata=metadata,
             source=tool_name,  # 与RetrievalResult枚举保持一致
             score=0.65,
         )
+        evidence: List[RetrievalResult] = [result]
+
+        # 尝试将引用的证据ID解析为额外的RetrievalResult
+        reference_results = self._resolve_reference_evidence(state, reference_ids)
+        if reference_results:
+            evidence.extend(reference_results)
         try:
             tracker = get_evidence_tracker(state)
-            return tracker.register([result])
+            evidence = tracker.register(evidence)
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("研究结果登记证据失败，使用原始结果: %s", exc)
-            return [result]
+            # 若登记失败，保持原有顺序，去重
+            seen: set[str] = set()
+            deduped: List[RetrievalResult] = []
+            for item in evidence:
+                if item.result_id in seen:
+                    continue
+                seen.add(item.result_id)
+                deduped.append(item)
+            evidence = deduped
+
+        if not evidence:
+            evidence = [result]
+        return evidence, answer_text, reference_ids
 
     def _update_state(
         self,
@@ -164,6 +197,8 @@ class ResearchExecutor(BaseExecutor):
         success: bool,
         error: Optional[str],
         result_payload: Any,
+        answer_text: str,
+        references: List[str],
     ) -> None:
         exec_context = state.execution_context
         if exec_context is None:
@@ -183,7 +218,9 @@ class ResearchExecutor(BaseExecutor):
             if task.task_id not in exec_context.completed_task_ids:
                 exec_context.completed_task_ids.append(task.task_id)
             exec_context.intermediate_results[task.task_id] = {
-                "research_result": result_payload,
+                "answer": answer_text,
+                "references": references,
+                "raw_result": result_payload,
             }
         else:
             exec_context.errors.append(
@@ -198,3 +235,106 @@ class ResearchExecutor(BaseExecutor):
 
         if state.plan is not None:
             state.plan.update_task_status(task.task_id, "completed" if success else "failed")
+
+    @staticmethod
+    def _extract_answer_text(result_payload: Any) -> str:
+        if isinstance(result_payload, dict):
+            for key in ("answer", "summary", "final_report", "response"):
+                value = result_payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            return json.dumps(result_payload, ensure_ascii=False)
+        if isinstance(result_payload, str):
+            return result_payload.strip()
+        return str(result_payload or "").strip()
+
+    @staticmethod
+    def _extract_reference_ids(result_payload: Any, answer_text: str) -> List[str]:
+        references: List[str] = []
+
+        def _push(candidate: Optional[str]) -> None:
+            if not candidate:
+                return
+            candidate = candidate.strip().strip("'\"")
+            if not candidate:
+                return
+            if candidate not in references:
+                references.append(candidate)
+
+        if isinstance(result_payload, dict):
+            reference_payload = result_payload.get("reference") or result_payload.get("references")
+            if isinstance(reference_payload, dict):
+                for key in ("doc_aggs", "chunks", "Chunks"):
+                    values = reference_payload.get(key)
+                    if isinstance(values, list):
+                        for item in values:
+                            if isinstance(item, dict):
+                                _push(item.get("doc_id") or item.get("chunk_id") or item.get("id"))
+                            else:
+                                _push(str(item))
+            elif isinstance(reference_payload, list):
+                for item in reference_payload:
+                    if isinstance(item, dict):
+                        _push(item.get("doc_id") or item.get("chunk_id") or item.get("id"))
+                    else:
+                        _push(str(item))
+
+        # 从答案文本中解析 {"Chunks": [...]} 结构或证据ID标签
+        if answer_text:
+            chunk_matches = re.findall(r"Chunks'\s*:\s*\[([^\]]+)\]", answer_text)
+            for block in chunk_matches:
+                for part in block.split(","):
+                    _push(part)
+
+            id_matches = re.findall(r"\[证据ID[:：]\s*([A-Za-z0-9\-]+)\]", answer_text)
+            for eid in id_matches:
+                _push(eid)
+
+        return references
+
+    def _resolve_reference_evidence(
+        self,
+        state: PlanExecuteState,
+        reference_ids: List[str],
+    ) -> List[RetrievalResult]:
+        if not reference_ids:
+            return []
+
+        existing_results: Dict[str, RetrievalResult] = {}
+
+        for record in state.execution_records:
+            for evidence in record.evidence:
+                if not isinstance(evidence, RetrievalResult):
+                    continue
+                key_candidates = {
+                    evidence.result_id,
+                    evidence.metadata.source_id,
+                    evidence.metadata.extra.get("doc_id") if isinstance(evidence.metadata.extra, dict) else None,
+                }
+                for candidate in key_candidates:
+                    if candidate:
+                        existing_results[str(candidate)] = evidence
+
+        resolved: List[RetrievalResult] = []
+        for ref_id in reference_ids:
+            matched = existing_results.get(ref_id)
+            if matched is not None:
+                resolved.append(matched)
+                continue
+
+            metadata = RetrievalMetadata(
+                source_id=ref_id,
+                source_type="document",
+                confidence=0.5,
+                extra={"from_reference": True},
+            )
+            resolved.append(
+                RetrievalResult(
+                    granularity="DO",
+                    evidence=f"引用原文片段未解析，来源ID: {ref_id}",
+                    metadata=metadata,
+                    source="deep_research_reference",
+                    score=0.5,
+                )
+            )
+        return resolved
