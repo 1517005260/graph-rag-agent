@@ -6,7 +6,10 @@ from langgraph.prebuilt import tools_condition
 import asyncio
 import re
 
-from graphrag_agent.config.prompt import LC_SYSTEM_PROMPT
+from graphrag_agent.config.prompts import (
+    LC_SYSTEM_PROMPT,
+    HYBRID_AGENT_GENERATE_PROMPT,
+)
 from graphrag_agent.config.settings import response_type
 from graphrag_agent.search.tool.hybrid_tool import HybridSearchTool
 
@@ -104,21 +107,8 @@ class HybridAgent(BaseAgent):
             return {"messages": [AIMessage(content=cached_result)]}
 
         prompt = ChatPromptTemplate.from_messages([
-        ("system", LC_SYSTEM_PROMPT),
-        ("human", """
-            ---分析报告--- 
-            以下是检索到的相关信息，按重要性排序：
-            
-            {context}
-            
-            用户的问题是：
-            {question}
-            
-            请以清晰、全面的方式回答问题，确保：
-            1. 回答结合了检索到的低级（实体细节）和高级（主题概念）信息
-            2. 使用三级标题(###)组织内容，增强可读性
-            3. 结尾处用"#### 引用数据"标记引用来源
-            """),
+            ("system", LC_SYSTEM_PROMPT),
+            ("human", HYBRID_AGENT_GENERATE_PROMPT),
         ])
 
         rag_chain = prompt | self.llm | StrOutputParser()
@@ -189,21 +179,8 @@ class HybridAgent(BaseAgent):
             return
 
         prompt = ChatPromptTemplate.from_messages([
-        ("system", LC_SYSTEM_PROMPT),
-        ("human", """
-            ---分析报告--- 
-            以下是检索到的相关信息，按重要性排序：
-            
-            {context}
-            
-            用户的问题是：
-            {question}
-            
-            请以清晰、全面的方式回答问题，确保：
-            1. 回答结合了检索到的低级（实体细节）和高级（主题概念）信息
-            2. 使用三级标题(###)组织内容，增强可读性
-            3. 结尾处用"#### 引用数据"标记引用来源
-            """),
+            ("system", LC_SYSTEM_PROMPT),
+            ("human", HYBRID_AGENT_GENERATE_PROMPT),
         ])
 
         # 使用流式模型

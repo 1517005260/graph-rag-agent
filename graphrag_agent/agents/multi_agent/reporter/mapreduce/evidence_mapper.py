@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from graphrag_agent.agents.multi_agent.core.retrieval_result import RetrievalResult
 from graphrag_agent.agents.multi_agent.reporter.outline_builder import SectionOutline
+from graphrag_agent.config.prompts import EVIDENCE_MAP_PROMPT
 from graphrag_agent.models.get_models import get_llm_model
 
 _LOGGER = logging.getLogger(__name__)
@@ -208,27 +209,3 @@ def _estimate_token_count(text: str) -> int:
     length = len(text)
     english_words = len(text.split())
     return max(length // 2, english_words)
-
-
-EVIDENCE_MAP_PROMPT = """
-你是一个信息提取专家。请从以下证据中提取关键信息，用于撰写章节「{section_title}」。
-
-**章节目标**: {section_goal}
-
-**证据列表**:
-{evidence_list}
-
-**任务**:
-1. 列出3-5个关键论点（key_points）
-2. 识别所有提及的实体（entities）
-3. 生成200字以内的摘要文本（summary_text）
-
-**输出格式**（JSON）:
-{{
-    "key_points": ["论点1", "论点2"],
-    "entities": ["实体1", "实体2"],
-    "summary_text": "摘要文本..."
-}}
-
-如果无法提取信息，请返回空的JSON对象。
-""".strip()

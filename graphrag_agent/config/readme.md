@@ -5,10 +5,17 @@
 graphrag_agent/config/    # 配置文件目录
 ├── __init__.py           # 包初始化文件（空文件）
 ├── neo4jdb.py            # Neo4j数据库连接管理
-├── prompt.py             # 知识图谱构建与搜索的提示模板
-├── reasoning_prompts.py  # 深度推理与搜索的提示模板
+├── prompts/              # 提示模板集合
 └── settings.py           # 全局配置参数与环境变量管理
 ```
+
+`prompts/` 子目录按功能拆分模板文件：
+
+- `graph_prompts.py`：图谱构建、索引维护、社区摘要
+- `qa_prompts.py`：各类检索问答（Naive/Local/Global/Reduce/上下文重写）
+- `reasoning_prompts.py`：深度推理流程的提示与常量
+- `planner_prompts.py`、`executor_prompts.py`、`reporter_prompts.py`：多智能体任务拆解、执行与报告模板
+- `__init__.py`：统一导出，提供单一入口 `graphrag_agent.config.prompts`
 
 ## 模块简介
 
@@ -101,103 +108,46 @@ with get_db_manager() as manager:
     result = manager.execute_query("MATCH (n:Entity) RETURN n LIMIT 10")
 ```
 
-### 3. 知识图谱构建与搜索提示模板 (prompt.py)
+### 3. 知识图谱构建与搜索提示模板 (prompts/graph_prompts.py & prompts/qa_prompts.py)
 
-`prompt.py` 定义了知识图谱全生命周期的LLM提示模板（共9个主要模板）：
+`prompts/graph_prompts.py` 收录了图谱构建与维护流程中的模板：
 
-**图谱构建阶段**：
-1. **system_template_build_graph**：实体关系抽取模板
-   - 引导LLM从文本识别指定类型的实体（entity_name、entity_type、entity_description）
-   - 识别实体间关系（source_entity、target_entity、relationship_type、relationship_description、relationship_strength）
-   - 使用tuple_delimiter和record_delimiter分隔输出
-   - 包含3个详细示例（不同领域）
+1. **system_template_build_graph**：实体关系抽取模板，定义实体、关系字段以及输出格式示例
+2. **human_template_build_graph**：实体抽取的人类输入模板，占位符由上游流程填充
+3. **system_template_build_index** / **user_template_build_index**：实体去重与列表格式化的双模板
+4. **community_template**：社区摘要生成模板，用于社区级别的自然语言描述
 
-2. **system_template_build_index**：实体去重模板
-   - 识别语义相似或格式差异的重复实体
-   - 输出Python列表格式的合并建议
-   - 特别规则：数字、日期、型号不合并
-   - 包含3个示例（游戏名称、公司名、日期）
+`prompts/qa_prompts.py` 则集中管理问答阶段的模板：
 
-3. **community_template**：社区摘要生成
-   - 基于节点和关系生成自然语言摘要
-   - 用于全局搜索的上下文
+1. **NAIVE_PROMPT**：NaiveRAG问答模板，强调依据检索片段作答和引用格式
+2. **LC_SYSTEM_PROMPT**：本地检索问答模板，支持实体/关系/报告/原文的引用标注
+3. **MAP_SYSTEM_PROMPT**：全局搜索Map阶段，输出结构化要点列表（含评分与引用）
+4. **REDUCE_SYSTEM_PROMPT**：全局搜索Reduce阶段，整合要点列表生成最终回答
+5. **contextualize_q_system_prompt**：对话上下文重写模板，使问题脱离对话历史依然可理解
 
-**问答阶段**：
-4. **NAIVE_PROMPT**：NaiveRAG提示模板
-   - 严格基于检索文档片段回答
-   - 禁止使用常识和已知信息
-   - Markdown格式输出，引用文档片段ID
-   - 引用格式：`{'data': {'Chunks':[id列表]}}`
+所有问答模板均对引用数量、Markdown结构、回答长度等做了统一约束。
 
-5. **LC_SYSTEM_PROMPT**：本地搜索（Local Search）提示模板
-   - 综合多个分析报告数据
-   - 保留Entities、Reports、Relationships、Chunks的引用
-   - 引用格式：`{'data': {'Entities':[...], 'Reports':[...], 'Relationships':[...], 'Chunks':[...]}}`
+### 4. 深度推理与搜索提示模板 (prompts/reasoning_prompts.py)
 
-6. **MAP_SYSTEM_PROMPT**：全局搜索Map阶段
-   - 从数据表格提取要点列表
-   - 每个要点包含description、score（0-100）、数据引用（nodes、relationships、communityId）
-   - 输出JSON格式
+`prompts/reasoning_prompts.py` 为 DeepResearch 相关工具提供推理循环所需的模板与常量：
 
-7. **REDUCE_SYSTEM_PROMPT**：全局搜索Reduce阶段
-   - 合并多个要点列表
-   - 保留要点引用：`{'points':[(要点顺序号, communityId)]}`
-   - Markdown格式输出
+- **BEGIN/END_SEARCH_QUERY、BEGIN/END_SEARCH_RESULT、MAX_SEARCH_LIMIT**：限定搜索交互的格式与次数
+- **REASON_PROMPT**：主推理循环模板，示范如何迭代搜索并整理结论
+- **RELEVANT_EXTRACTION_PROMPT**：从搜索结果中提取与当前查询相关的信息
+- **SUB_QUERY_PROMPT**：将复杂问题分解为子查询
+- **FOLLOWUP_QUERY_PROMPT**：判断是否需要追加搜索
+- **FINAL_ANSWER_PROMPT**：基于思考过程和检索结果生成最终回答
 
-8. **contextualize_q_system_prompt**：对话历史上下文化
-   - 将依赖上下文的问题改写为独立问题
-   - 用于多轮对话场景
+这些模板支撑了多轮推理、假设生成、结论整合等高级能力，确保推理路径可追踪、响应可解释。
 
-**输出格式规范**：
-- 所有模板强调引用数据源（不超过5个ID）
-- 使用Markdown格式化输出
-- 严格禁止无依据的信息
-- 支持可配置的回答长度和格式（response_type）
+### Prompt 集中管理的例外说明
 
-### 4. 深度推理与搜索提示模板 (reasoning_prompts.py)
+以下提示暂未迁入 `config/prompts/`，原因是它们在运行时需要根据上下文动态拼装大段内容，或与复杂流程紧密耦合，拆分会显著增加代码复杂度：
 
-`reasoning_prompts.py` 为DeepResearchAgent提供多轮推理的提示模板系统：
-
-**搜索标记常量**：
-- `BEGIN_SEARCH_QUERY` / `END_SEARCH_QUERY`：包裹搜索查询
-- `BEGIN_SEARCH_RESULT` / `END_SEARCH_RESULT`：包裹搜索结果
-- `MAX_SEARCH_LIMIT = 5`：最大搜索轮次
-
-**核心提示模板**：
-
-1. **REASON_PROMPT**：推理助手主提示
-   - 定义搜索-推理循环模式
-   - 包含2个完整示例：
-     - 示例1：多步推理（《大白鲨》vs《皇家赌场》导演国籍对比，4轮搜索）
-     - 示例2：政策查询（深圳新能源汽车补贴，3轮搜索）
-   - 强调查询语言一致性、关键词精简、逐步推理
-
-2. **RELEVANT_EXTRACTION_PROMPT**：相关信息提取
-   - 输入：之前推理步骤 + 当前搜索查询 + 搜索内容
-   - 输出：`**Final Information**` + 有用信息（或"No helpful information found"）
-   - 确保信息与查询相关且能推进推理
-
-3. **SUB_QUERY_PROMPT**：子查询分解
-   - 将复杂问题分解为最多3个子问题
-   - 简单问题保持原样
-   - 输出Python列表格式
-   - 示例：新能源汽车补贴 → 乘用车补贴 + 商用车补贴 + 政策变化
-
-4. **FOLLOWUP_QUERY_PROMPT**：后续查询判断
-   - 输入：原始查询 + 已检索信息
-   - 判断是否需要额外搜索（最多2个）
-   - 考虑信息完整性、缺口、时效性
-   - 输出Python列表格式
-
-5. **FINAL_ANSWER_PROMPT**：最终答案生成
-   - 输入：用户问题 + 检索内容 + 思考过程
-   - 生成综合性答案，不解释思考过程
-   - 格式要求：简洁语言、结构化标题、直接确定的表达（避免"可能"等不确定词）
-
-**应用场景**：
-- 多步推理问题（需要多个信息片段组合）
-- 探索性研究（不确定信息来源）
-- Chain of Exploration（知识图谱上的证据链追踪）
+- `graphrag_agent/search/tool/deep_research_tool.py:1190`：答案修复 `fix_prompt` 直接插入实时 question/answer 详情，并在异步修复流程中内联调用。
+- `graphrag_agent/search/tool/deeper_research_tool.py:844` 与 `1975`：`enhanced_prompt` 会在执行过程中不断串接检索片段、知识图谱摘要、社区洞察等多段文本，属流式构造。
+- `graphrag_agent/search/tool/reasoning/community_enhance.py:278`、`chain_of_exploration.py:185/479`、`evidence.py:377`：这些推理工具按步骤动态拼接指南、路径和证据描述，难以抽象为单一模板。
+- `graphrag_agent/evaluation/metrics/*`（`answer_metrics.py`, `deep_search_metrics.py`, `retrieval_metrics.py`, `graph_metrics.py`, `llm_metrics.py` 等）：评估流程会针对不同指标拼接问题、候选答案、引用片段，且存在多层 fallback 逻辑，暂维持本地定义以避免引入大量模板分支。
 
 ## 核心API接口
 
@@ -290,11 +240,11 @@ from graphrag_agent.config.settings import (
 - `_get_env_bool(key, default)`：获取布尔型环境变量
 - `_get_env_choice(key, choices, default)`：获取枚举型环境变量
 
-### 提示模板API (prompt.py)
+### 提示模板API (config.prompts)
 
 **直接导入模板字符串**：
 ```python
-from graphrag_agent.config.prompt import (
+from graphrag_agent.config.prompts import (
     # 图谱构建模板
     system_template_build_graph,  # 实体关系抽取
     human_template_build_graph,   # 用户输入模板
@@ -326,11 +276,11 @@ formatted_prompt = system_template_build_graph.format(
 formatted_prompt = NAIVE_PROMPT.format(response_type="多个段落")
 ```
 
-### 推理提示API (reasoning_prompts.py)
+### 推理提示API (config.prompts)
 
 **导入常量和模板**：
 ```python
-from graphrag_agent.config.reasoning_prompts import (
+from graphrag_agent.config.prompts import (
     # 搜索标记
     BEGIN_SEARCH_QUERY,     # "<|begin_search_query|>"
     END_SEARCH_QUERY,       # "<|end_search_query|>"

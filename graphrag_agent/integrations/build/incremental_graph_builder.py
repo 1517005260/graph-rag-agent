@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 
 from graphrag_agent.models.get_models import get_llm_model
-from graphrag_agent.config.prompt import system_template_build_graph, human_template_build_graph
+from graphrag_agent.config.prompts import system_template_build_graph, human_template_build_graph
 from graphrag_agent.config.settings import (
     entity_types, relationship_types, CHUNK_SIZE, OVERLAP, MAX_WORKERS, BATCH_SIZE,
     FILE_REGISTRY_PATH

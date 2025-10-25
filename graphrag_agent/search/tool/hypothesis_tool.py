@@ -4,7 +4,7 @@ from langchain_core.tools import BaseTool
 
 from graphrag_agent.models.get_models import get_llm_model
 from graphrag_agent.search.tool.reasoning.search import QueryGenerator
-from graphrag_agent.config.reasoning_prompts import SUB_QUERY_PROMPT, FOLLOWUP_QUERY_PROMPT
+from graphrag_agent.config.prompts import SUB_QUERY_PROMPT, FOLLOWUP_QUERY_PROMPT
 
 
 class HypothesisGeneratorTool:

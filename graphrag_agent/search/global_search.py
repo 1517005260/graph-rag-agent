@@ -3,7 +3,12 @@ from tqdm import tqdm
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-from graphrag_agent.config.prompt import MAP_SYSTEM_PROMPT, REDUCE_SYSTEM_PROMPT
+from graphrag_agent.config.prompts import (
+    MAP_SYSTEM_PROMPT,
+    REDUCE_SYSTEM_PROMPT,
+    GLOBAL_SEARCH_MAP_PROMPT,
+    GLOBAL_SEARCH_REDUCE_PROMPT,
+)
 from graphrag_agent.config.neo4jdb import get_db_manager
 
 class GlobalSearch:
@@ -67,13 +72,7 @@ class GlobalSearch:
         # 设置Map阶段的提示模板
         map_prompt = ChatPromptTemplate.from_messages([
             ("system", MAP_SYSTEM_PROMPT),
-            ("human", """
-                ---数据表格--- 
-                {context_data}
-                
-                用户的问题是：
-                {question}
-                """),
+            ("human", GLOBAL_SEARCH_MAP_PROMPT),
         ])
         
         # 创建Map阶段的处理链
@@ -105,13 +104,7 @@ class GlobalSearch:
         # 设置Reduce阶段的提示模板
         reduce_prompt = ChatPromptTemplate.from_messages([
             ("system", REDUCE_SYSTEM_PROMPT),
-            ("human", """
-                ---分析报告--- 
-                {report_data}
-
-                用户的问题是：
-                {question}
-                """),
+            ("human", GLOBAL_SEARCH_REDUCE_PROMPT),
         ])
         
         # 创建Reduce阶段的处理链

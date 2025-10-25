@@ -5,7 +5,7 @@ from langchain_core.output_parsers import StrOutputParser
 import re
 import asyncio
 
-from graphrag_agent.config.prompt import NAIVE_PROMPT
+from graphrag_agent.config.prompts import NAIVE_PROMPT, NAIVE_RAG_HUMAN_PROMPT
 from graphrag_agent.config.settings import response_type
 from graphrag_agent.search.tool.naive_search_tool import NaiveSearchTool
 from graphrag_agent.agents.base import BaseAgent
@@ -86,14 +86,8 @@ class NaiveRagAgent(BaseAgent):
 
         # 创建提示模板
         prompt = ChatPromptTemplate.from_messages([
-        ("system", NAIVE_PROMPT),
-        ("human", """
-            ---检索结果--- 
-            {context}
-            
-            问题：
-            {question}
-            """),
+            ("system", NAIVE_PROMPT),
+            ("human", NAIVE_RAG_HUMAN_PROMPT),
         ])
 
         rag_chain = prompt | self.llm | StrOutputParser()

@@ -11,6 +11,11 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 
 from graphrag_agent.agents.multi_agent.reporter.outline_builder import ReportOutline
+from graphrag_agent.config.prompts import (
+    INTRO_PROMPT,
+    CONCLUSION_PROMPT,
+    TERMINOLOGY_PROMPT,
+)
 from graphrag_agent.models.get_models import get_llm_model
 
 _LOGGER = logging.getLogger(__name__)
@@ -152,33 +157,3 @@ class ReportAssembler:
         message: BaseMessage = self._llm.invoke(prompt)  # type: ignore[assignment]
         content = getattr(message, "content", None) or str(message)
         return content.strip()
-
-
-INTRO_PROMPT = """
-你需要为报告「{report_title}」撰写引言。
-
-**原始查询/任务**: {query}
-
-**章节概要**:
-{section_summaries}
-
-请以150-200字撰写引言，概述报告背景与结构。输出Markdown段落，不要使用列表或代码块。
-""".strip()
-
-
-CONCLUSION_PROMPT = """
-你需要为报告「{report_title}」撰写结论。
-
-**章节内容摘要**:
-{section_content}
-
-共使用证据数量: {evidence_count}
-
-请总结关键发现并给出建议，150-200字，输出Markdown段落。
-""".strip()
-
-
-TERMINOLOGY_PROMPT = """
-请从以下文本中提取不超过10个关键术语及其解释，输出JSON对象：
-{section_text}
-""".strip()

@@ -7,7 +7,20 @@ import traceback
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from graphrag_agent.search.tool.reasoning.nlp import extract_between
-from graphrag_agent.config.reasoning_prompts import BEGIN_SEARCH_QUERY, BEGIN_SEARCH_RESULT, END_SEARCH_RESULT, REASON_PROMPT, END_SEARCH_QUERY
+from graphrag_agent.config.prompts import (
+    BEGIN_SEARCH_QUERY,
+    BEGIN_SEARCH_RESULT,
+    END_SEARCH_RESULT,
+    REASON_PROMPT,
+    END_SEARCH_QUERY,
+    INITIAL_THINKING_PROMPT,
+    HYPOTHESIS_GENERATION_PROMPT,
+    HYPOTHESIS_VERIFICATION_PROMPT,
+    VERIFICATION_STATUS_PROMPT,
+    UPDATE_THINKING_PROMPT,
+    COUNTERFACTUAL_ANALYSIS_PROMPT,
+    COUNTERFACTUAL_COMPARISON_PROMPT,
+)
 
 
 class ThinkingEngine:
@@ -44,15 +57,7 @@ class ThinkingEngine:
     
     def generate_initial_thinking(self):
         """生成初步思考过程"""
-        prompt = """
-        请对问题进行深入思考，考虑以下方面:
-        1. 问题的核心是什么？
-        2. 需要哪些信息来回答这个问题？
-        3. 有哪些可能的思考方向？
-        
-        请提供你的推理过程，不需要立即给出答案。
-        """
-        
+        prompt = INITIAL_THINKING_PROMPT
         response = self.llm.invoke([
             {"role": "system", "content": prompt},
             {"role": "user", "content": self.msg_history[0]["content"]}
@@ -73,21 +78,7 @@ class ThinkingEngine:
         返回:
             List[Dict]: 假设列表
         """
-        prompt = f"""
-        基于初步思考：
-        {initial_thinking}
-        
-        生成3-5个合理的假设，每个假设应该：
-        1. 解释已有的观察结果
-        2. 可以被进一步验证
-        3. 相互之间有所不同
-        
-        以JSON格式返回：
-        [
-            {{"hypothesis": "...", "reasoning": "..."}},
-            ...
-        ]
-        """
+        prompt = HYPOTHESIS_GENERATION_PROMPT.format(initial_thinking=initial_thinking)
         
         response = self.llm.invoke(prompt)
         content = response.content if hasattr(response, 'content') else str(response)
@@ -176,20 +167,10 @@ class ThinkingEngine:
         返回:
             Dict: 验证结果
         """
-        prompt = f"""
-        请验证以下假设：
-        
-        假设: {hypothesis['hypothesis']}
-        理由: {hypothesis['reasoning']}
-        
-        请考虑:
-        1. 这个假设是否符合已知信息?
-        2. 有哪些证据支持或反对这个假设?
-        3. 这个假设是否有逻辑漏洞?
-        4. 是否需要更多信息来验证这个假设?
-        
-        请提供详细的验证分析。
-        """
+        prompt = HYPOTHESIS_VERIFICATION_PROMPT.format(
+            hypothesis_text=hypothesis["hypothesis"],
+            reasoning_text=hypothesis["reasoning"],
+        )
         
         response = self.llm.invoke(prompt)
         verification = response.content if hasattr(response, 'content') else str(response)
@@ -220,19 +201,7 @@ class ThinkingEngine:
             str: 验证状态 (supported/rejected/uncertain)
         """
         # 分析验证文本，确定假设状态
-        prompt = f"""
-        根据以下验证分析，该假设的状态是什么?
-        
-        验证分析:
-        {verification}
-        
-        请从以下三个选项中选择一个:
-        - supported: 假设被证据支持
-        - rejected: 假设被证据反驳
-        - uncertain: 证据不足，无法确定
-        
-        只返回一个状态单词，不要包含解释。
-        """
+        prompt = VERIFICATION_STATUS_PROMPT.format(verification=verification)
         
         try:
             response = self.llm.invoke(prompt)
@@ -335,14 +304,9 @@ class ThinkingEngine:
         self.add_reasoning_step(verification_summary)
         
         # 基于验证结果更新思考
-        prompt = f"""
-        基于以下验证结果汇总，请更新你的思考过程:
-        
-        {verification_summary}
-        
-        请综合考虑所有被支持的假设，并解释为什么拒绝其他假设。
-        提供一个更新后的、连贯的思考过程。
-        """
+        prompt = UPDATE_THINKING_PROMPT.format(
+            verification_summary=verification_summary
+        )
         
         response = self.llm.invoke(prompt)
         updated_thinking = response.content if hasattr(response, 'content') else str(response)
@@ -511,13 +475,7 @@ class ThinkingEngine:
         self.add_reasoning_step(f"反事实假设: {hypothesis}")
         
         # 基于反事实假设进行推理
-        prompt = f"""
-        假设以下情况为真:
-        {hypothesis}
-        
-        基于这个假设，请重新思考问题。即使这个假设与事实不符，也请认真推理。
-        分析如果这个假设为真，会导致什么结论?
-        """
+        prompt = COUNTERFACTUAL_ANALYSIS_PROMPT.format(hypothesis=hypothesis)
         
         response = self.llm.invoke(prompt)
         counter_analysis = response.content if hasattr(response, 'content') else str(response)
@@ -526,15 +484,7 @@ class ThinkingEngine:
         self.add_reasoning_step(f"反事实分析结果:\n\n{counter_analysis}")
         
         # 对比原始推理和反事实推理
-        prompt = f"""
-        请比较原始推理和反事实假设下的推理:
-        
-        原始推理基于已知事实。
-        反事实推理基于假设: {hypothesis}
-        
-        这种对比揭示了什么关键见解?
-        这是否帮助我们更好地理解问题?
-        """
+        prompt = COUNTERFACTUAL_COMPARISON_PROMPT.format(hypothesis=hypothesis)
         
         response = self.llm.invoke(prompt)
         comparison = response.content if hasattr(response, 'content') else str(response)

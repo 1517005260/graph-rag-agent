@@ -9,7 +9,13 @@ import asyncio
 import json
 import re
 
-from graphrag_agent.config.prompt import LC_SYSTEM_PROMPT, REDUCE_SYSTEM_PROMPT
+from graphrag_agent.config.prompts import (
+    LC_SYSTEM_PROMPT,
+    REDUCE_SYSTEM_PROMPT,
+    GRAPH_AGENT_KEYWORD_PROMPT,
+    GRAPH_AGENT_GENERATE_PROMPT,
+    GRAPH_AGENT_REDUCE_PROMPT,
+)
 from graphrag_agent.config.settings import response_type
 from graphrag_agent.search.tool.local_search_tool import LocalSearchTool
 from graphrag_agent.search.tool.global_search_tool import GlobalSearchTool
@@ -70,15 +76,7 @@ class GraphAgent(BaseAgent):
         # 使用LLM提取关键词
         try:
             # 使用简单的prompt模板，避免复杂格式
-            prompt = f"""提取以下查询的关键词:
-            查询: {query}
-            
-            请提取两类关键词:
-            1. 低级关键词: 具体实体、名称、术语
-            2. 高级关键词: 主题、概念、领域
-            
-            以JSON格式返回。
-            """
+            prompt = GRAPH_AGENT_KEYWORD_PROMPT.format(query=query)
             
             result = self.llm.invoke(prompt)
             
@@ -196,21 +194,8 @@ class GraphAgent(BaseAgent):
             return {"messages": [AIMessage(content=cached_result)]}
 
         prompt = ChatPromptTemplate.from_messages([
-        ("system", LC_SYSTEM_PROMPT),
-        ("human", """
-            ---分析报告--- 
-            请注意，下面提供的分析报告按**重要性降序排列**。
-            
-            {context}
-            
-            用户的问题是：
-            {question}
-            
-            请严格按照以下格式输出回答：
-            1. 使用三级标题(###)标记主题
-            2. 主要内容用清晰的段落展示
-            3. 最后必须用"#### 引用数据"标记引用部分，列出用到的数据来源
-            """),
+            ("system", LC_SYSTEM_PROMPT),
+            ("human", GRAPH_AGENT_GENERATE_PROMPT),
         ])
 
         rag_chain = prompt | self.llm | StrOutputParser()
@@ -249,13 +234,7 @@ class GraphAgent(BaseAgent):
 
         reduce_prompt = ChatPromptTemplate.from_messages([
             ("system", REDUCE_SYSTEM_PROMPT),
-            ("human", """
-                ---分析报告--- 
-                {report_data}
-
-                用户的问题是：
-                {question}
-                """),
+            ("human", GRAPH_AGENT_REDUCE_PROMPT),
         ])
         
         reduce_chain = reduce_prompt | self.llm | StrOutputParser()
@@ -312,21 +291,8 @@ class GraphAgent(BaseAgent):
 
         # 构建提示模板
         prompt = ChatPromptTemplate.from_messages([
-        ("system", LC_SYSTEM_PROMPT),
-        ("human", """
-            ---分析报告--- 
-            请注意，下面提供的分析报告按**重要性降序排列**。
-            
-            {context}
-            
-            用户的问题是：
-            {question}
-            
-            请严格按照以下格式输出回答：
-            1. 使用三级标题(###)标记主题
-            2. 主要内容用清晰的段落展示
-            3. 最后必须用"#### 引用数据"标记引用部分，列出用到的数据来源
-            """),
+            ("system", LC_SYSTEM_PROMPT),
+            ("human", GRAPH_AGENT_GENERATE_PROMPT),
         ])
 
         # 使用流式模型

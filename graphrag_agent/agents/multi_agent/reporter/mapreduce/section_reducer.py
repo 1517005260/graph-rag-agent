@@ -16,6 +16,12 @@ from graphrag_agent.agents.multi_agent.reporter.mapreduce.evidence_mapper import
     EvidenceSummary,
 )
 from graphrag_agent.agents.multi_agent.reporter.outline_builder import SectionOutline
+from graphrag_agent.config.prompts import (
+    SECTION_REDUCE_PROMPT,
+    INTERMEDIATE_SUMMARY_PROMPT,
+    MERGE_PROMPT,
+    REFINE_PROMPT,
+)
 from graphrag_agent.models.get_models import get_llm_model
 
 _LOGGER = logging.getLogger(__name__)
@@ -292,79 +298,3 @@ def _estimate_token_count(text: str) -> int:
     length = len(text)
     english_words = len(text.split())
     return max(length // 2, english_words)
-
-
-SECTION_REDUCE_PROMPT = """
-你是一个技术写作专家。请基于以下证据摘要，撰写章节「{section_title}」的内容。
-
-**章节要求**:
-- 目标: {section_goal}
-- 预估字数: {estimated_words}
-
-**证据摘要**（已经过预处理）:
-{evidence_summaries}
-
-**写作要求**:
-1. 整合所有关键论点，去除冗余
-2. 保持逻辑连贯，使用过渡句
-3. 引用格式：[证据ID]
-4. 字数控制在 {estimated_words} ± 20% 范围内
-
-输出Markdown格式的章节内容，不要使用代码块。
-""".strip()
-
-
-INTERMEDIATE_SUMMARY_PROMPT = """
-你正在为章节「{section_title}」进行资料整合。请基于以下摘要生成更精炼的中间摘要。
-
-**章节目标**: {section_goal}
-
-**输入摘要**:
-{evidence_summaries}
-
-请输出JSON格式：
-{{
-    "key_points": ["要点1", "要点2"],
-    "entities": ["实体1", "实体2"],
-    "summary_text": "整合后的摘要"
-}}
-""".strip()
-
-
-MERGE_PROMPT = """
-请融合两个摘要，输出整合结果的JSON。
-
-**章节**: {section_title}
-
-左侧摘要:
-{left_summary}
-
-右侧摘要:
-{right_summary}
-
-请输出JSON：
-{{
-    "key_points": ["要点1", "要点2"],
-    "entities": ["实体1", "实体2"],
-    "summary_text": "合并后的摘要"
-}}
-""".strip()
-
-
-REFINE_PROMPT = """
-请根据新证据精炼当前章节草稿。
-
-**当前草稿**:
-{current_draft}
-
-**新证据摘要**:
-{new_evidence}
-
-任务：
-1. 判断新证据是否提供了新信息
-2. 如有新信息，将其自然融入草稿
-3. 如与现有内容冲突，保留更可靠的版本
-4. 保持章节「{section_title}」的主题一致性
-
-输出更新后的章节内容（Markdown格式），不要使用代码块。
-""".strip()

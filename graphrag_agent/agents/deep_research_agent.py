@@ -5,7 +5,12 @@ from langchain_core.output_parsers import StrOutputParser
 import asyncio
 import re
 
-from graphrag_agent.config.prompt import LC_SYSTEM_PROMPT
+from graphrag_agent.config.prompts import (
+    LC_SYSTEM_PROMPT,
+    DEEP_RESEARCH_THINKING_SUMMARY_PROMPT,
+    EXPLORATION_SUMMARY_PROMPT,
+    CONTRADICTION_IMPACT_PROMPT,
+)
 from graphrag_agent.config.settings import response_type
 from graphrag_agent.search.tool.deeper_research_tool import DeeperResearchTool
 from graphrag_agent.search.tool.deep_research_tool import DeepResearchTool 
@@ -193,18 +198,7 @@ class DeepResearchAgent(BaseAgent):
             # 创建总结提示
             prompt = ChatPromptTemplate.from_messages([
                 ("system", LC_SYSTEM_PROMPT),
-                ("human", """
-                    以下是对问题的思考过程:
-                    
-                    {thinking}
-                    
-                    原始问题是:
-                    {question}
-                    
-                    请生成一个全面、有深度的回答，不要重复思考过程，直接给出最终综合结论。
-                    结论应该清晰、直接地回答问题，包含相关的事实和见解。
-                    如果有不同的观点或矛盾的信息，请指出并提供平衡的视角。
-                    """),
+                ("human", DEEP_RESEARCH_THINKING_SUMMARY_PROMPT),
             ])
             
             # 创建处理链
@@ -452,17 +446,11 @@ class DeepResearchAgent(BaseAgent):
             content_summary = "\n\n".join(key_content)
             
             # 构建摘要提示
-            summary_prompt = f"""
-            基于以下知识图谱探索路径和发现的内容，生成一个关于"{query}"的综合性摘要:
-            
-            探索路径:
-            {path_summary}
-            
-            关键内容:
-            {content_summary}
-            
-            请提供一个全面、有深度的分析，包括关键发现、关联关系和见解。
-            """
+            summary_prompt = EXPLORATION_SUMMARY_PROMPT.format(
+                query=query,
+                path_summary=path_summary,
+                content_summary=content_summary,
+            )
             
             # 生成探索摘要
             try:
@@ -568,13 +556,10 @@ class DeepResearchAgent(BaseAgent):
                 
                 contradictions_text = "\n".join(contradiction_texts)
                 
-                impact_prompt = f"""
-                在回答关于"{query}"的问题时，发现以下信息矛盾:
-                
-                {contradictions_text}
-                
-                请分析这些矛盾对最终答案可能产生的影响，以及如何在存在这些矛盾的情况下给出最准确的回答。
-                """
+                impact_prompt = CONTRADICTION_IMPACT_PROMPT.format(
+                    query=query,
+                    contradictions_text=contradictions_text,
+                )
                 
                 try:
                     response = self.llm.invoke(impact_prompt)

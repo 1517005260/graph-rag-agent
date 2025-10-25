@@ -1,6 +1,11 @@
 from typing import Dict, List
 import re
 
+from graphrag_agent.config.prompts import (
+    SEARCH_RESULT_COMPARISON_PROMPT,
+    SEARCH_MULTI_HYPOTHESIS_PROMPT,
+)
+
 class DualPathSearcher:
     """
     双路径搜索器：支持同时使用多种方式搜索知识库
@@ -98,24 +103,11 @@ class DualPathSearcher:
         """
         try:
             # 构建评估提示
-            prompt = f"""请评估以下两个搜索结果，判断哪个更具体、包含更多有价值的信息，特别是具体数字、规定或明确标准。
-                
-            原始查询: {query}
-
-            结果1:
-            {text1}
-
-            结果2:
-            {text2}
-
-            请评估哪个结果包含更具体的信息（如明确的规定、数字、标准等）。
-            只返回以下三个选项之一：
-            - "precise"：如果结果1更具体、更有价值
-            - "kb"：如果结果2更具体、更有价值
-            - "both"：如果两者具有相当的价值或包含不同的有价值信息
-
-            只返回选项，不要包含其他解释。
-            """
+            prompt = SEARCH_RESULT_COMPARISON_PROMPT.format(
+                query=query,
+                text1=text1,
+                text2=text2,
+            )
             
             # 调用LLM进行评估
             if hasattr(self, "llm"):
@@ -257,18 +249,7 @@ class QueryGenerator:
         Returns:
             List[str]: 假设列表
         """
-        prompt = f"""
-        为以下问题生成2-3个可能的假设，这些假设应该代表不同角度或思路：
-        
-        问题: "{query}"
-        
-        每个假设应该:
-        1. 不同于其他假设
-        2. 提供一种可能的思考方向
-        3. 有助于深入分析问题
-        
-        以列表形式返回假设，每个假设简短明了。
-        """
+        prompt = SEARCH_MULTI_HYPOTHESIS_PROMPT.format(query=query)
         
         try:
             response = llm.invoke(prompt)

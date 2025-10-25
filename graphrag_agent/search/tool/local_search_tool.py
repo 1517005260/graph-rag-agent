@@ -9,7 +9,12 @@ from langchain.tools.retriever import create_retriever_tool
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.tools import BaseTool
 
-from graphrag_agent.config.prompt import LC_SYSTEM_PROMPT, contextualize_q_system_prompt
+from graphrag_agent.config.prompts import (
+    LC_SYSTEM_PROMPT,
+    contextualize_q_system_prompt,
+    LOCAL_SEARCH_CONTEXT_PROMPT,
+    LOCAL_SEARCH_KEYWORD_PROMPT,
+)
 from graphrag_agent.config.settings import lc_description
 from graphrag_agent.search.tool.base import BaseSearchTool
 from graphrag_agent.search.local_search import LocalSearch
@@ -54,17 +59,7 @@ class LocalSearchTool(BaseSearchTool):
         lc_prompt_with_history = ChatPromptTemplate.from_messages([
             ("system", LC_SYSTEM_PROMPT),
             MessagesPlaceholder("chat_history"),
-            ("human", """
-            ---分析报告--- 
-            请注意，下面提供的分析报告按**重要性降序排列**。
-            
-            {context}
-            
-            用户的问题是：
-            {input}
-
-            请使用三级标题(###)标记主题
-            """),
+            ("human", LOCAL_SEARCH_CONTEXT_PROMPT),
         ])
 
         # 创建问答链
@@ -81,22 +76,8 @@ class LocalSearchTool(BaseSearchTool):
         
         # 创建关键词提取链
         self.keyword_prompt = ChatPromptTemplate.from_messages([
-            ("system", """你是一个专门从用户查询中提取搜索关键词的助手。你需要将关键词分为两类：
-                1. 低级关键词：具体实体名称、人物、地点、具体事件等
-                2. 高级关键词：主题、概念、关系类型等
-                
-                返回格式必须是JSON格式：
-                {{
-                    "low_level": ["关键词1", "关键词2", ...], 
-                    "high_level": ["关键词1", "关键词2", ...]
-                }}
-                
-                注意：
-                - 每类提取3-5个关键词即可
-                - 不要添加任何解释或其他文本，只返回JSON
-                - 如果某类无关键词，则返回空列表
-                """),
-            ("human", "{query}")
+            ("system", LOCAL_SEARCH_KEYWORD_PROMPT),
+            ("human", "{query}"),
         ])
         
         self.keyword_chain = self.keyword_prompt | self.llm | StrOutputParser()

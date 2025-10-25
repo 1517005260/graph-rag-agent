@@ -8,6 +8,7 @@ import concurrent.futures
 import time
 
 from graphrag_agent.config.settings import MAX_WORKERS
+from graphrag_agent.config.prompts import COMMUNITY_SUMMARY_PROMPT
 
 class BaseCommunityDescriber:
     """社区信息格式化工具"""
@@ -157,7 +158,7 @@ class BaseSummarizer(ABC):
         """设置LLM处理链"""
         try:
             community_prompt = ChatPromptTemplate.from_messages([
-                ("system", "给定一个输入三元组，生成信息摘要。没有序言。"),
+                ("system", COMMUNITY_SUMMARY_PROMPT),
                 ("human", "{community_info}"),
             ])
             self.community_chain = community_prompt | self.llm | StrOutputParser()

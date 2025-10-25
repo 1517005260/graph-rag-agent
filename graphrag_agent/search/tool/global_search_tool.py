@@ -6,7 +6,13 @@ from langchain_core.tools import BaseTool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-from graphrag_agent.config.prompt import MAP_SYSTEM_PROMPT, REDUCE_SYSTEM_PROMPT
+from graphrag_agent.config.prompts import (
+    MAP_SYSTEM_PROMPT,
+    REDUCE_SYSTEM_PROMPT,
+    GLOBAL_SEARCH_MAP_PROMPT,
+    GLOBAL_SEARCH_REDUCE_PROMPT,
+    GLOBAL_SEARCH_KEYWORD_PROMPT,
+)
 from graphrag_agent.config.settings import gl_description, GLOBAL_SEARCH_SETTINGS
 from graphrag_agent.search.tool.base import BaseSearchTool
 from graphrag_agent.search.retrieval_adapter import (
@@ -42,42 +48,21 @@ class GlobalSearchTool(BaseSearchTool):
         # 设置Map阶段的处理链
         map_prompt = ChatPromptTemplate.from_messages([
             ("system", MAP_SYSTEM_PROMPT),
-            ("human", """
-                ---数据表格--- 
-                {context_data}
-                
-                用户的问题是：
-                {question}
-                """),
+            ("human", GLOBAL_SEARCH_MAP_PROMPT),
         ])
         self.map_chain = map_prompt | self.llm | StrOutputParser()
         
         # 设置Reduce阶段的处理链
         reduce_prompt = ChatPromptTemplate.from_messages([
             ("system", REDUCE_SYSTEM_PROMPT),
-            ("human", """
-                ---分析报告--- 
-                {report_data}
-
-                用户的问题是：
-                {question}
-                """),
+            ("human", GLOBAL_SEARCH_REDUCE_PROMPT),
         ])
         self.reduce_chain = reduce_prompt | self.llm | StrOutputParser()
         
         # 关键词提取链
         self.keyword_prompt = ChatPromptTemplate.from_messages([
-            ("system", """你是一个专门从用户查询中提取搜索关键词的助手。提取最相关的关键词，这些关键词将用于在知识库中查找信息。
-                
-                请返回一个关键词列表，格式为JSON数组：
-                ["关键词1", "关键词2", ...]
-                
-                注意：
-                - 提取5-8个关键词即可
-                - 不要添加任何解释或其他文本，只返回JSON数组
-                - 关键词应该是名词短语、概念或专有名词
-                """),
-            ("human", "{query}")
+            ("system", GLOBAL_SEARCH_KEYWORD_PROMPT),
+            ("human", "{query}"),
         ])
         
         self.keyword_chain = self.keyword_prompt | self.llm | StrOutputParser()

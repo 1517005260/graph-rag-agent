@@ -10,7 +10,7 @@ from langchain_core.tools import BaseTool
 
 from graphrag_agent.models.get_models import get_llm_model, get_embeddings_model
 from graphrag_agent.graph.core import connection_manager
-from graphrag_agent.config.prompt import (
+from graphrag_agent.config.prompts import (
     system_template_build_graph,
     human_template_build_graph
 )
@@ -18,7 +18,7 @@ from graphrag_agent.config.settings import (
     entity_types,
     relationship_types
 )
-from graphrag_agent.config.reasoning_prompts import RELEVANT_EXTRACTION_PROMPT
+from graphrag_agent.config.prompts import RELEVANT_EXTRACTION_PROMPT
 from graphrag_agent.search.tool.reasoning.prompts import kb_prompt
 from graphrag_agent.graph.extraction.entity_extractor import EntityRelationExtractor
 from graphrag_agent.search.tool.deep_research_tool import DeepResearchTool

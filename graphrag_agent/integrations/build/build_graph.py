@@ -10,7 +10,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from graphrag_agent.models.get_models import get_llm_model, get_embeddings_model
-from graphrag_agent.config.prompt import (
+from graphrag_agent.config.prompts import (
     system_template_build_graph,
     human_template_build_graph
 )

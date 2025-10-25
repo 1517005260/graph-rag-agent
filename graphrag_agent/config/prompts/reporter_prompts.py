@@ -288,3 +288,134 @@ CITATION_FORMAT_PROMPT = '''你是一个引用格式化助手。你需要将检�
 
 现在请生成引用列表，使用Markdown格式输出：
 '''
+
+
+# Map-Reduce 辅助模板
+EVIDENCE_MAP_PROMPT = """
+你是一个信息提取专家。请从以下证据中提取关键信息，用于撰写章节「{section_title}」。
+
+**章节目标**: {section_goal}
+
+**证据列表**:
+{evidence_list}
+
+**任务**:
+1. 列出3-5个关键论点（key_points）
+2. 识别所有提及的实体（entities）
+3. 生成200字以内的摘要文本（summary_text）
+
+**输出格式**（JSON）:
+{{
+    "key_points": ["论点1", "论点2"],
+    "entities": ["实体1", "实体2"],
+    "summary_text": "摘要文本..."
+}}
+
+如果无法提取信息，请返回空的JSON对象。
+""".strip()
+
+
+SECTION_REDUCE_PROMPT = """
+你是一个技术写作专家。请基于以下证据摘要，撰写章节「{section_title}」的内容。
+
+**章节要求**:
+- 目标: {section_goal}
+- 预估字数: {estimated_words}
+
+**证据摘要**（已经过预处理）:
+{evidence_summaries}
+
+**写作要求**:
+1. 整合所有关键论点，去除冗余
+2. 保持逻辑连贯，使用过渡句
+3. 引用格式：[证据ID]
+4. 字数控制在 {estimated_words} ± 20% 范围内
+
+输出Markdown格式的章节内容，不要使用代码块。
+""".strip()
+
+
+INTERMEDIATE_SUMMARY_PROMPT = """
+你正在为章节「{section_title}」进行资料整合。请基于以下摘要生成更精炼的中间摘要。
+
+**章节目标**: {section_goal}
+
+**输入摘要**:
+{evidence_summaries}
+
+请输出JSON格式：
+{{
+    "key_points": ["要点1", "要点2"],
+    "entities": ["实体1", "实体2"],
+    "summary_text": "整合后的摘要"
+}}
+""".strip()
+
+
+MERGE_PROMPT = """
+请融合两个摘要，输出整合结果的JSON。
+
+**章节**: {section_title}
+
+左侧摘要:
+{left_summary}
+
+右侧摘要:
+{right_summary}
+
+请输出JSON：
+{{
+    "key_points": ["要点1", "要点2"],
+    "entities": ["实体1", "实体2"],
+    "summary_text": "合并后的摘要"
+}}
+""".strip()
+
+
+REFINE_PROMPT = """
+请根据新证据精炼当前章节草稿。
+
+**当前草稿**:
+{current_draft}
+
+**新证据摘要**:
+{new_evidence}
+
+任务：
+1. 判断新证据是否提供了新信息
+2. 如有新信息，将其自然融入草稿
+3. 如与现有内容冲突，保留更可靠的版本
+4. 保持章节「{section_title}」的主题一致性
+
+输出更新后的章节内容（Markdown格式），不要使用代码块。
+""".strip()
+
+
+INTRO_PROMPT = """
+你需要为报告「{report_title}」撰写引言。
+
+**原始查询/任务**: {query}
+
+**章节概要**:
+{section_summaries}
+
+请以150-200字撰写引言，概述报告背景与结构。输出Markdown段落，不要使用列表或代码块。
+""".strip()
+
+
+CONCLUSION_PROMPT = """
+你需要为报告「{report_title}」撰写结论。
+
+**章节内容摘要**:
+{section_content}
+
+共使用证据数量: {evidence_count}
+
+请总结关键发现并给出建议，150-200字，输出Markdown段落。
+""".strip()
+
+
+TERMINOLOGY_PROMPT = """
+请从以下文本中提取不超过10个关键术语及其解释，输出JSON对象：
+{section_text}
+""".strip()

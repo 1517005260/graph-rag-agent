@@ -8,7 +8,11 @@ from langchain_core.tools import BaseTool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-from graphrag_agent.config.prompt import LC_SYSTEM_PROMPT
+from graphrag_agent.config.prompts import (
+    LC_SYSTEM_PROMPT,
+    HYBRID_TOOL_QUERY_PROMPT,
+    LOCAL_SEARCH_KEYWORD_PROMPT,
+)
 from graphrag_agent.config.settings import gl_description, response_type, HYBRID_SEARCH_SETTINGS
 from graphrag_agent.search.tool.base import BaseSearchTool
 from graphrag_agent.agents.multi_agent.core.retrieval_result import RetrievalResult
@@ -48,25 +52,7 @@ class HybridSearchTool(BaseSearchTool):
         # 创建主查询处理链 - 用于生成最终答案
         self.query_prompt = ChatPromptTemplate.from_messages([
             ("system", LC_SYSTEM_PROMPT),
-            ("human", """
-                ---分析报告--- 
-                请注意，以下内容组合了低级详细信息和高级主题概念。
-
-                ## 低级内容（实体详细信息）:
-                {low_level}
-                
-                ## 高级内容（主题和概念）:
-                {high_level}
-
-                用户的问题是：
-                {query}
-                
-                请综合利用上述信息回答问题，确保回答全面且有深度。
-                回答格式应包含：
-                1. 主要内容（使用清晰的段落展示）
-                2. 在末尾标明引用的数据来源
-                """
-            )
+            ("human", HYBRID_TOOL_QUERY_PROMPT),
         ])
         
         # 链接到LLM
@@ -74,22 +60,8 @@ class HybridSearchTool(BaseSearchTool):
         
         # 关键词提取链
         self.keyword_prompt = ChatPromptTemplate.from_messages([
-            ("system", """你是一个专门从用户查询中提取搜索关键词的助手。你需要将关键词分为两类：
-                1. 低级关键词：具体实体名称、人物、地点、具体事件等
-                2. 高级关键词：主题、概念、关系类型等
-                
-                返回格式必须是JSON格式：
-                {{
-                    "low_level": ["关键词1", "关键词2", ...], 
-                    "high_level": ["关键词1", "关键词2", ...]
-                }}
-                
-                注意：
-                - 每类提取3-5个关键词即可
-                - 不要添加任何解释或其他文本，只返回JSON
-                - 如果某类无关键词，则返回空列表
-                """),
-            ("human", "{query}")
+            ("system", LOCAL_SEARCH_KEYWORD_PROMPT),
+            ("human", "{query}"),
         ])
         
         self.keyword_chain = self.keyword_prompt | self.llm | StrOutputParser()

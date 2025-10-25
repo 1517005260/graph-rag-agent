@@ -6,7 +6,7 @@ from langchain_core.tools import BaseTool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-from graphrag_agent.config.prompt import NAIVE_PROMPT
+from graphrag_agent.config.prompts import NAIVE_PROMPT, NAIVE_SEARCH_QUERY_PROMPT
 from graphrag_agent.config.settings import response_type, naive_description, NAIVE_SEARCH_TOP_K
 from graphrag_agent.search.tool.base import BaseSearchTool
 from graphrag_agent.search.utils import VectorUtils
@@ -31,13 +31,7 @@ class NaiveSearchTool(BaseSearchTool):
         # 创建查询处理链
         self.query_prompt = ChatPromptTemplate.from_messages([
             ("system", NAIVE_PROMPT),
-            ("human", """
-                ---文档片段--- 
-                {context}
-                
-                问题：
-                {query}
-                """),
+            ("human", NAIVE_SEARCH_QUERY_PROMPT),
         ])
         
         # 链接到LLM

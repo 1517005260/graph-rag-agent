@@ -7,6 +7,7 @@ from graphrag_agent.config.settings import (
     ALIGNMENT_CONFLICT_THRESHOLD,
     ALIGNMENT_MIN_GROUP_SIZE
 )
+from graphrag_agent.config.prompts import entity_alignment_prompt
 
 class EntityAligner:
     """
@@ -133,10 +134,7 @@ class EntityAligner:
             for e in entities
         ])
         
-        prompt = f"""Given these entities that should refer to the same concept:
-{entity_desc}
-
-Which entity ID best represents the canonical form? Reply with only the entity ID."""
+        prompt = entity_alignment_prompt.format(entity_desc=entity_desc)
         
         try:
             response = self.llm.invoke(prompt)
