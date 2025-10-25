@@ -38,6 +38,19 @@ def _get_env_bool(key: str, default: bool) -> bool:
     return raw.lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _get_env_choice(key: str, choices: set[str], default: str) -> str:
+    """获取有限集合中的字符串配置，未设置时返回默认值"""
+    raw = os.getenv(key)
+    if raw is None or raw.strip() == "":
+        return default
+    value = raw.strip().lower()
+    if value not in choices:
+        raise ValueError(
+            f"环境变量 {key} 必须为 {', '.join(sorted(choices))} 之一，但当前为 {raw}"
+        )
+    return value
+
+
 # ===== 基础路径设置 =====
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # graphrag_agent包目录
@@ -325,3 +338,13 @@ MULTI_AGENT_REFLECTION_ALLOW_RETRY = _get_env_bool(
 MULTI_AGENT_REFLECTION_MAX_RETRIES = (
     _get_env_int("MA_REFLECTION_MAX_RETRIES", 1) or 1
 )
+MULTI_AGENT_WORKER_EXECUTION_MODE = _get_env_choice(
+    "MA_WORKER_EXECUTION_MODE",
+    {"sequential", "parallel"},
+    "sequential",
+)
+MULTI_AGENT_WORKER_MAX_CONCURRENCY = (
+    _get_env_int("MA_WORKER_MAX_CONCURRENCY", MAX_WORKERS) or MAX_WORKERS
+)
+if MULTI_AGENT_WORKER_MAX_CONCURRENCY < 1:
+    raise ValueError("MA_WORKER_MAX_CONCURRENCY 必须大于等于 1")

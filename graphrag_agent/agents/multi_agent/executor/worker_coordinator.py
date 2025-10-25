@@ -1,9 +1,10 @@
 """
 执行调度器
 
-根据PlanExecutionSignal调度不同类型的Worker执行任务。
+根据 PlanExecutionSignal 调度不同类型的 Worker 执行任务，支持串行与并行模式。
 """
-from typing import Dict, List, Optional
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from typing import Dict, List, Optional, Tuple
 import logging
 
 from graphrag_agent.agents.multi_agent.core.execution_record import (
@@ -25,6 +26,8 @@ from graphrag_agent.agents.multi_agent.executor.reflector import ReflectionExecu
 from graphrag_agent.config.settings import (
     MULTI_AGENT_REFLECTION_ALLOW_RETRY,
     MULTI_AGENT_REFLECTION_MAX_RETRIES,
+    MULTI_AGENT_WORKER_EXECUTION_MODE,
+    MULTI_AGENT_WORKER_MAX_CONCURRENCY,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,11 +37,17 @@ class WorkerCoordinator:
     """
     Worker协调器
 
-    负责解析计划信号、选择合适的执行器并串行/并行地执行任务。
-    当前实现以串行为主，其他执行模式将降级为串行执行。
+    负责解析计划信号、选择合适的执行器并串行或并行地执行任务。
+    默认模式可通过环境变量或构造参数进行配置。
     """
 
-    def __init__(self, executors: Optional[List[BaseExecutor]] = None) -> None:
+    def __init__(
+        self,
+        executors: Optional[List[BaseExecutor]] = None,
+        *,
+        execution_mode: Optional[str] = None,
+        max_parallel_workers: Optional[int] = None,
+    ) -> None:
         if executors is None:
             executors = [
                 RetrievalExecutor(),
@@ -46,6 +55,20 @@ class WorkerCoordinator:
                 ReflectionExecutor(),
             ]
         self.executors = executors
+        configured_mode = (
+            execution_mode.strip().lower()
+            if isinstance(execution_mode, str)
+            else MULTI_AGENT_WORKER_EXECUTION_MODE
+        )
+        if configured_mode not in {"sequential", "parallel"}:
+            raise ValueError(
+                f"WorkerCoordinator execution_mode 必须为 sequential 或 parallel，当前为 {configured_mode}"
+            )
+        workers = max_parallel_workers or MULTI_AGENT_WORKER_MAX_CONCURRENCY
+        if workers < 1:
+            raise ValueError("max_parallel_workers 必须大于等于 1")
+        self.execution_mode = configured_mode
+        self.max_parallel_workers = workers
 
     def register_executor(self, executor: BaseExecutor) -> None:
         """注册额外的执行器"""
@@ -56,28 +79,193 @@ class WorkerCoordinator:
         state: PlanExecuteState,
         signal: PlanExecutionSignal,
     ) -> List[ExecutionRecord]:
-        """
-        根据计划信号执行所有任务，返回执行记录列表。
-        """
+        """根据计划信号执行所有任务，返回执行记录列表。"""
         task_map = self._prepare_tasks(signal)
 
         if state.plan is not None:
             state.plan.status = "executing"
 
-        results: List[ExecutionRecord] = []
-        if signal.execution_mode in ("parallel", "adaptive"):
-            _LOGGER.info(
-                "当前执行器暂不支持%s模式，自动降级为串行执行",
-                signal.execution_mode,
-            )
+        effective_mode = self._resolve_execution_mode(signal.execution_mode)
+        if effective_mode == "parallel":
+            results = self._execute_parallel(state, signal, task_map)
+        else:
+            results = self._execute_sequential(state, signal, task_map)
 
+        if state.plan is not None:
+            node_status = [node.status for node in state.plan.task_graph.nodes]
+            if node_status and all(status == "completed" for status in node_status):
+                state.plan.status = "completed"
+            elif any(status == "failed" for status in node_status):
+                state.plan.status = "failed"
+
+        return results
+
+    def _resolve_execution_mode(self, requested_mode: str) -> str:
+        requested = (requested_mode or "sequential").lower()
+        if requested not in {"sequential", "parallel"}:
+            if requested == "adaptive":
+                _LOGGER.warning("Planner 请求 adaptive 模式，当前仅支持串行或并行，将使用 %s", self.execution_mode)
+            else:
+                _LOGGER.warning(
+                    "Planner 请求的执行模式 %s 无效，将使用 %s",
+                    requested_mode,
+                    self.execution_mode,
+                )
+            requested = "sequential"
+
+        effective = self.execution_mode
+        if effective != requested:
+            _LOGGER.info(
+                "WorkerCoordinator 使用 %s 模式执行计划（覆盖 planner 请求 %s）",
+                effective,
+                requested_mode,
+            )
+        else:
+            _LOGGER.debug("WorkerCoordinator 以 %s 模式执行计划", effective)
+        return effective
+
+    def _execute_sequential(
+        self,
+        state: PlanExecuteState,
+        signal: PlanExecutionSignal,
+        task_map: Dict[str, TaskNode],
+    ) -> List[ExecutionRecord]:
+        results: List[ExecutionRecord] = []
         sequence = signal.execution_sequence or list(task_map.keys())
         for task_id in sequence:
             task = task_map.get(task_id)
             if task is None:
                 _LOGGER.warning("计划信号中包含未知任务: %s", task_id)
                 continue
+            self._execute_single_task(
+                state=state,
+                signal=signal,
+                task=task,
+                task_map=task_map,
+                results=results,
+                skip_dependency_check=False,
+            )
+        return results
 
+    def _execute_parallel(
+        self,
+        state: PlanExecuteState,
+        signal: PlanExecutionSignal,
+        task_map: Dict[str, TaskNode],
+    ) -> List[ExecutionRecord]:
+        results: List[ExecutionRecord] = []
+        sequence = signal.execution_sequence or list(task_map.keys())
+        missing = [task_id for task_id in sequence if task_id not in task_map]
+        for task_id in missing:
+            _LOGGER.warning("计划信号中包含未知任务: %s", task_id)
+
+        pending: List[str] = [task_id for task_id in sequence if task_id in task_map]
+        if not pending:
+            return results
+
+        max_workers = min(self.max_parallel_workers, max(1, len(pending)))
+        inflight: Dict[object, str] = {}
+        task_status: Dict[str, str] = {task_id: "pending" for task_id in pending}
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            while pending or inflight:
+                scheduled_this_round = False
+
+                for task_id in list(pending):
+                    if len(inflight) >= max_workers:
+                        break
+
+                    status = task_status.get(task_id)
+                    if status != "pending":
+                        pending.remove(task_id)
+                        continue
+
+                    task = task_map[task_id]
+                    dependency_ok, dependency_error, failure_reason = self._check_dependencies(task, state)
+                    if dependency_ok:
+                        future = executor.submit(
+                            self._execute_single_task,
+                            state=state,
+                            signal=signal,
+                            task=task,
+                            task_map=task_map,
+                            results=results,
+                            skip_dependency_check=True,
+                        )
+                        inflight[future] = task_id
+                        task_status[task_id] = "running"
+                        pending.remove(task_id)
+                        scheduled_this_round = True
+                        continue
+
+                    if failure_reason in {"dependency_failed", "dependency_missing"}:
+                        _LOGGER.error(
+                            "任务依赖未满足，跳过执行: task_id=%s reason=%s",
+                            task.task_id,
+                            dependency_error,
+                        )
+                        failure_record = self._create_failure_record(
+                            state,
+                            task,
+                            dependency_error or "依赖未满足",
+                            failure_reason=failure_reason,
+                        )
+                        results.append(failure_record)
+                        task_status[task_id] = "failed"
+                        pending.remove(task_id)
+                        scheduled_this_round = True
+                    # dependency 未完成，等待下一轮
+
+                if inflight:
+                    done, _ = wait(inflight.keys(), return_when=FIRST_COMPLETED)
+                    for future in done:
+                        task_id = inflight.pop(future)
+                        task = task_map[task_id]
+                        try:
+                            success, _ = future.result()
+                        except Exception as exc:  # noqa: BLE001
+                            _LOGGER.exception("任务执行异常: task_id=%s error=%s", task_id, exc)
+                            failure_record = self._create_failure_record(
+                                state,
+                                task,
+                                f"任务执行异常: {exc}",
+                                failure_reason="execution_exception",
+                            )
+                            results.append(failure_record)
+                            success = False
+
+                        task_status[task_id] = "completed" if success else "failed"
+                        scheduled_this_round = True
+                    continue
+
+                if not scheduled_this_round:
+                    if pending:
+                        for task_id in list(pending):
+                            task = task_map[task_id]
+                            failure_record = self._create_failure_record(
+                                state,
+                                task,
+                                "任务依赖未解析或存在循环依赖",
+                                failure_reason="dependency_unresolved",
+                            )
+                            results.append(failure_record)
+                            task_status[task_id] = "failed"
+                        pending.clear()
+                    break
+
+        return results
+
+    def _execute_single_task(
+        self,
+        *,
+        state: PlanExecuteState,
+        signal: PlanExecutionSignal,
+        task: TaskNode,
+        task_map: Dict[str, TaskNode],
+        results: List[ExecutionRecord],
+        skip_dependency_check: bool,
+    ) -> Tuple[bool, Optional[str]]:
+        if not skip_dependency_check:
             dependency_ok, dependency_error, failure_reason = self._check_dependencies(task, state)
             if not dependency_ok:
                 _LOGGER.error(
@@ -92,20 +280,21 @@ class WorkerCoordinator:
                     failure_reason=failure_reason,
                 )
                 results.append(failure_record)
-                continue
+                return False, failure_reason
 
-            executor = self._select_executor(task.task_type)
-            if executor is None:
-                _LOGGER.error("未找到匹配的执行器: task_id=%s type=%s", task_id, task.task_type)
-                failure_record = self._create_failure_record(
-                    state,
-                    task,
-                    f"未找到任务类型 {task.task_type} 对应的执行器",
-                    failure_reason="executor_not_found",
-                )
-                results.append(failure_record)
-                continue
+        executor = self._select_executor(task.task_type)
+        if executor is None:
+            _LOGGER.error("未找到匹配的执行器: task_id=%s type=%s", task.task_id, task.task_type)
+            failure_record = self._create_failure_record(
+                state,
+                task,
+                f"未找到任务类型 {task.task_type} 对应的执行器",
+                failure_reason="executor_not_found",
+            )
+            results.append(failure_record)
+            return False, "executor_not_found"
 
+        try:
             if state.plan is not None:
                 state.plan.update_task_status(task.task_id, "running")
 
@@ -128,14 +317,20 @@ class WorkerCoordinator:
                 if retry_result is not None:
                     exec_result = retry_result
 
-        if state.plan is not None:
-            node_status = [node.status for node in state.plan.task_graph.nodes]
-            if node_status and all(status == "completed" for status in node_status):
-                state.plan.status = "completed"
-            elif any(status == "failed" for status in node_status):
-                state.plan.status = "failed"
+            if exec_result.success:
+                return True, None
+            return False, exec_result.error or "execution_failed"
 
-        return results
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.exception("任务执行异常: task_id=%s error=%s", task.task_id, exc)
+            failure_record = self._create_failure_record(
+                state,
+                task,
+                f"任务执行异常: {exc}",
+                failure_reason="execution_exception",
+            )
+            results.append(failure_record)
+            return False, "execution_exception"
 
     def _prepare_tasks(self, signal: PlanExecutionSignal) -> Dict[str, TaskNode]:
         """将信号中的任务恢复为TaskNode对象"""

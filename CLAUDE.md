@@ -4,377 +4,302 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-GraphRAG Agent is a comprehensive Retrieval-Augmented Generation (RAG) system that combines GraphRAG with private-domain Deep Search, implementing explainable and reasoning-capable intelligent Q&A through multi-agent collaboration and knowledge graph enhancement.
+This is a GraphRAG + Deep Search implementation with multi-agent collaboration system. The project combines knowledge graph construction, entity disambiguation, community detection, and multiple agent types (NaiveRAG, GraphAgent, HybridAgent, DeepResearchAgent, FusionGraphRAGAgent) to build an explainable and reasoning-capable Q&A system.
 
-The project is written primarily in Python and uses:
-- **LangChain/LangGraph** for agent orchestration and workflows
-- **Neo4j** for knowledge graph storage
-- **FastAPI** for backend services
-- **Streamlit** for frontend interface
+**Language**: Primarily Chinese (comments, docs, UI) with English code structures.
 
-## Development Commands
+## Architecture
+
+### Core Package Structure (`graphrag_agent/`)
+
+- **agents/**: Agent implementations with Plan-Execute-Report multi-agent orchestration
+  - `base.py`: BaseAgent with LangGraph integration, cache managers, and stream/non-stream support
+  - Individual agents: `naive_rag_agent.py`, `graph_agent.py`, `hybrid_agent.py`, `deep_research_agent.py`, `fusion_agent.py`
+  - `multi_agent/`: Plan-Execute-Report architecture
+    - `planner/`: Clarifier, TaskDecomposer, PlanReviewer → generates `PlanSpec`
+    - `executor/`: RetrievalExecutor, ResearchExecutor, ReflectionExecutor
+    - `reporter/`: OutlineBuilder, SectionWriter, ConsistencyChecker (Map-Reduce)
+    - `integration/`: Facade for backward compatibility
+
+- **graph/**: Knowledge graph construction
+  - `extraction/`: LLM-based entity/relationship extraction
+  - `processing/`: Entity disambiguation and alignment
+  - `indexing/`: Vector index management
+  - `core/`: Connection manager for Neo4j
+
+- **search/**: Multi-level search strategies
+  - `local_search.py`: Entity-centric search with neighborhood exploration
+  - `global_search.py`: Community-level search
+  - `tool/`: NaiveSearchTool, DeepResearchTool, reasoning components
+
+- **cache_manager/**: Two-tier caching (session-aware + global)
+  - `backends/`: Hybrid memory/disk storage
+  - `strategies/`: Context-aware and global key strategies
+  - `vector_similarity/`: Semantic cache matching
+
+- **community/**: Graph community detection and summarization
+  - `detector/`: Leiden and SLLPA algorithms
+  - `summary/`: LLM-based community summary generation
+
+- **pipelines/ingestion/**: Multi-format document processing (TXT, PDF, MD, DOCX, DOC, CSV, JSON, YAML)
+
+- **evaluation/**: 20+ evaluation metrics for answer quality, retrieval performance, graph quality
+
+### Services Layer
+
+- **server/**: FastAPI backend (`main.py`)
+  - `routers/`: API endpoints
+  - `services/agent_service.py`: Agent lifecycle management
+  - `server_config/`: Auto-inherits from root config
+
+- **frontend/**: Streamlit UI (`app.py`)
+  - Debug mode with trace visualization, graph interaction
+  - Knowledge graph visualization (Neo4j-style)
+
+### Integration Entry Points
+
+- **`graphrag_agent/integrations/build/main.py`**: Full pipeline orchestration
+  - Calls `KnowledgeGraphBuilder` → `IndexCommunityBuilder` → `ChunkIndexBuilder`
+  - Must run in this order; chunk index depends on entity index
+
+- **`graphrag_agent/integrations/build/incremental_update.py`**: Incremental updates
+  - `--once`: Single incremental build
+  - `--daemon`: Background daemon for periodic updates
+
+## Configuration
+
+### Three-Tier Config System
+
+1. **`.env`**: Runtime parameters, API keys, performance tuning (see `.env.example`)
+2. **`graphrag_agent/config/settings.py`**: Knowledge graph schema (entity_types, relationship_types, theme, examples)
+3. **Service configs**: Auto-inherit from layers 1-2
+
+**Critical `.env` settings**:
+```env
+OPENAI_API_KEY=sk-xxx
+OPENAI_BASE_URL=http://localhost:13000/v1  # One-API or compatible proxy
+OPENAI_EMBEDDINGS_MODEL=text-embedding-3-large
+OPENAI_LLM_MODEL=gpt-4o
+NEO4J_URI=neo4j://localhost:7687
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=12345678
+```
+
+**Editing entity/relationship schema**: Modify `graphrag_agent/config/settings.py`:
+```python
+entity_types = ["学生类型", "奖学金类型", "处分类型", "部门", "学生职责", "管理规定"]
+relationship_types = ["申请", "评选", "违纪", "资助", "申诉", "管理", "权利义务", "互斥"]
+```
+
+## Common Commands
 
 ### Environment Setup
-
 ```bash
-# Create conda environment
+# Create environment
 conda create -n graphrag python==3.10
 conda activate graphrag
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Initialize project
+# Install in editable mode
 pip install -e .
 ```
 
-### Building Knowledge Graph
-
+### Neo4j & One-API Setup
 ```bash
-# Initial full build
+# Start Neo4j
+cd graph-rag-agent/
+docker compose up -d
+
+# Start One-API (optional, for API proxy)
+docker run --name one-api -d --restart always \
+  -p 13000:3000 \
+  -e TZ=Asia/Shanghai \
+  -v /home/ubuntu/data/one-api:/data \
+  justsong/one-api
+```
+
+### Knowledge Graph Construction
+```bash
+# Place source files in files/ directory first
+
+# Full build (must run in this order)
 python graphrag_agent/integrations/build/main.py
 
 # Incremental update (single run)
 python graphrag_agent/integrations/build/incremental_update.py --once
 
-# Daemon mode (periodic updates)
+# Incremental update (daemon mode)
 python graphrag_agent/integrations/build/incremental_update.py --daemon
 ```
 
-### Testing
+**IMPORTANT**: Entity index must exist before chunk index. If running individual steps, complete entity indexing before chunk indexing to avoid errors.
 
+### Testing
 ```bash
 cd test/
 
-# Non-streaming query test
+# Non-streaming test
 python search_without_stream.py
 
-# Streaming query test
+# Streaming test
 python search_with_stream.py
 
-# Agent-specific tests
-python test_deep_agent.py
-python test_cache_system.py
-```
-
-### Evaluation
-
-```bash
+# Evaluation
 cd graphrag_agent/evaluation/test/
-# See README in that directory for details
+# See README in that directory
 ```
 
 ### Running Services
-
 ```bash
-# Start backend (from project root)
+# Backend (FastAPI)
 python server/main.py
 
-# Start frontend (from project root, in separate terminal)
+# Frontend (Streamlit)
 streamlit run frontend/app.py
-
-# Start Neo4j via Docker
-docker compose up -d
 ```
 
-## Architecture
+## Agent System
 
-### Core Components
+### BaseAgent Architecture
+All agents inherit from `graphrag_agent/agents/base.py`:
+- Uses LangGraph for workflow orchestration (`StateGraph`, `ToolNode`)
+- Dual LLM instances: `self.llm` (standard) and `self.stream_llm` (streaming)
+- Two-tier caching: `cache_manager` (session context-aware) + `global_cache_manager` (cross-session)
+- `MemorySaver` for conversation state
 
-#### 1. Agent System (`graphrag_agent/agents/`)
+### Agent Types
+- **NaiveRagAgent**: Basic vector retrieval
+- **GraphAgent**: Graph-structure reasoning
+- **HybridAgent**: Multi-strategy search
+- **DeepResearchAgent**: Multi-step think-search-reasoning
+- **FusionGraphRAGAgent**: Plan-Execute-Report multi-agent orchestration
 
-The agent system has evolved from basic GraphRAG to a sophisticated multi-agent architecture:
+### Streaming Implementation
+**Note**: Current streaming is pseudo-streaming due to LangChain version constraints (generates full answer, then chunks it). True streaming awaits framework updates.
 
-- **BaseAgent**: Foundation class providing caching, LangGraph workflows, streaming, and performance monitoring
-- **NaiveRagAgent**: Simple vector retrieval for basic queries
-- **GraphAgent**: Graph-structure based agent using local/global search
-- **HybridAgent**: Combines low-level entity details with high-level topic concepts
-- **DeepResearchAgent**: Multi-step think-search-reason with visible reasoning traces
-- **FusionGraphRAGAgent**: Advanced agent using Plan-Execute-Report multi-agent architecture
+To test agents, comment out unwanted agents in test scripts to avoid long runtimes.
 
-#### 2. Multi-Agent System (`graphrag_agent/agents/multi_agent/`)
+## Search Strategies
 
-**Plan-Execute-Report Architecture**:
+- **Local Search**: Entity-centric with neighborhood expansion (`graphrag_agent/search/local_search.py`)
+- **Global Search**: Community-level aggregation (`graphrag_agent/search/global_search.py`)
+- **Hybrid Search**: Combines multiple search modes
+- **Deep Research**: Chain of Exploration on knowledge graph with evidence tracking
 
-```
-FusionGraphRAGAgent → MultiAgentFacade → Orchestrator
-                                            ↓
-                    ┌───────────────────────┼───────────────────────┐
-                    ↓                       ↓                       ↓
-                Planner                 Executor                Reporter
-        (澄清、分解、审校)           (检索、研究、反思)        (纲要、章节、一致性)
-                    ↓                       ↓                       ↓
-                PlanSpec            ExecutionRecords          ReportResult
-```
+Search tools are registered via `graphrag_agent/search/tool_registry.py` and consumed by agents.
 
-**Planner** generates structured task plans via:
-- **Clarifier**: Identifies ambiguity and generates clarification questions
-- **TaskDecomposer**: Breaks queries into subtasks with dependency graph
-- **PlanReviewer**: Audits and optimizes task plans
-
-**WorkerCoordinator** dispatches executors based on task types:
-- **RetrievalExecutor**: Runs local_search, global_search, hybrid_search, naive_search
-- **ResearchExecutor**: Executes deep_research, chain_exploration
-- **Reflector**: Quality assessment and improvement suggestions
-- Supports sequential, parallel, and adaptive execution modes
-
-**Reporter** generates structured reports using Map-Reduce pattern:
-- **OutlineBuilder**: Creates report structure
-- **SectionWriter**: Writes sections (traditional or Map-Reduce mode)
-- **EvidenceMapper**: Maps large evidence sets to summaries (parallel)
-- **SectionReducer**: Reduces summaries to coherent sections
-- **ReportAssembler**: Assembles final report
-- **ConsistencyChecker**: Validates content against evidence
-- **CitationFormatter**: Generates citations
-- Two-level caching: report-level and section-level
-
-#### 3. Graph Module (`graphrag_agent/graph/`)
-
-Handles knowledge graph construction:
-- **extraction/**: LLM-driven entity and relation extraction
-- **indexing/**: Entity and chunk indexing
-- **processing/**: Entity disambiguation, alignment, merging, and quality improvement
-- **structure/**: Graph structure building
-
-Key mechanisms:
-- **Entity Disambiguation**: Maps mentions to canonical entities using string recall + vector re-ranking + NIL detection
-- **Entity Alignment**: Resolves conflicts within canonical entities while preserving all relationships
-
-#### 4. Search Module (`graphrag_agent/search/`)
-
-Multiple search strategies:
-- **LocalSearch**: Neighborhood search for specific details
-- **GlobalSearch**: Community-level search for macro analysis
-- **HybridSearch**: Combines local + global
-- **DeepResearch Tool** (`tool/deeper_research/`): Multi-step reasoning with:
-  - Chain of Exploration on knowledge graph
-  - Evidence chain tracking
-  - Thinking process visualization
-  - Dual-path search (precise + enhanced queries)
-
-#### 5. Cache Manager (`graphrag_agent/cache_manager/`)
-
-Multi-layer caching system:
-- **Backends**: Memory, Disk, Hybrid, ThreadSafe wrappers
-- **Strategies**: Simple keys, context-aware keys, keyword-aware keys
-- **Vector Similarity Matching**: Semantic cache lookup
-- Used by agents for session-level and global caching
-
-#### 6. Community Detection (`graphrag_agent/community/`)
-
-- **Algorithms**: Leiden and SLLPA
-- **Summary Generation**: Automatic community summarization
-- Configurable via `settings.py` (`community_algorithm = 'leiden'`)
-
-#### 7. Evaluation System (`graphrag_agent/evaluation/`)
-
-20+ metrics across dimensions:
-- **Answer Quality**: EM, F1 Score
-- **Retrieval Performance**: Precision, Utilization, Latency
-- **Graph Evaluation**: Entity Coverage, Graph Coverage, Community Relevance
-- **LLM Evaluation**: Coherence, Factual Consistency, Comprehensiveness
-- **Deep Search**: Reasoning Coherence, Reasoning Depth, Iterative Improvement
-
-### Data Flow
-
-1. **Graph Construction**: Documents (files/) → DocumentProcessor → EntityExtractor → EntityDisambiguator/Aligner → Neo4j
-2. **Querying**: User Query → Agent (choose based on complexity) → Search Tools (local/global/deep) → LLM → Response
-3. **Multi-Agent Flow**: Query → Planner (PlanSpec) → WorkerCoordinator (ExecutionRecords) → Reporter (ReportResult)
-
-## Configuration
-
-### Environment Variables (`.env`)
-
-```env
-OPENAI_API_KEY='sk-xxx'
-OPENAI_BASE_URL='http://localhost:13000/v1'  # One-API gateway
-OPENAI_EMBEDDINGS_MODEL='text-embedding-3-large'
-OPENAI_LLM_MODEL='gpt-4o'
-
-NEO4J_URI='neo4j://localhost:7687'
-NEO4J_USERNAME='neo4j'
-NEO4J_PASSWORD='12345678'
-
-# Cache embedding provider: 'openai' or 'sentence_transformer'
-CACHE_EMBEDDING_PROVIDER='openai'
-CACHE_SENTENCE_TRANSFORMER_MODEL='all-MiniLM-L6-v2'
-MODEL_CACHE_ROOT='./cache'
-
-# Optional: LangSmith tracing
-LANGSMITH_TRACING=true
-LANGSMITH_API_KEY="xxx"
-LANGSMITH_PROJECT="xxx"
-```
-
-### Graph Settings (`graphrag_agent/config/settings.py`)
-
-Key configurations:
-- `theme`: Knowledge graph theme (e.g., "华东理工大学学生管理")
-- `entity_types` / `relationship_types`: Entity/relation schemas
-- `community_algorithm`: 'leiden' or 'sllpa'
-- `conflict_strategy`: 'manual_first', 'auto_first', or 'merge' for incremental updates
-- `CHUNK_SIZE` / `OVERLAP`: Text chunking parameters
-- Performance tuning: `MAX_WORKERS`, `BATCH_SIZE`, `GDS_CONCURRENCY`, etc.
-- Disambiguation/alignment thresholds: `DISAMBIG_STRING_THRESHOLD`, `DISAMBIG_VECTOR_THRESHOLD`, etc.
-
-Example questions for frontend are also defined here in `examples` list.
-
-## Key Design Patterns
-
-### 1. LangGraph State-Based Workflows
-
-All agents inherit from `BaseAgent` and use LangGraph's `StateGraph`:
-- Nodes: `agent`, `retrieve`, `generate`, `reduce`
-- Conditional edges based on document grading
-- Checkpointer for memory management
-- Subclasses customize via `_add_retrieval_edges()`
-
-### 2. Tool Abstraction
-
-Search tools (`graphrag_agent/search/tool/`) inherit from base classes:
-- Unified interface: `search()`, `search_stream()`, `thinking_stream()`
-- RetrievalAdapter standardizes results across different search types
-- Tools are registered with agents and invoked via LangGraph
-
-### 3. Multi-Agent Orchestration
-
-Plan-Execute-Report pattern with clear separation of concerns:
-- **Planner**: Strategy layer (what to do)
-- **Executor**: Execution layer (how to do it)
-- **Reporter**: Presentation layer (how to present it)
-- **Orchestrator**: Coordination layer (workflow management)
-- **Legacy Facade**: Compatibility layer for gradual migration
-
-### 4. Caching Strategy
-
-Hierarchical caching:
-- **Session Cache**: Per-thread caching for conversational context
-- **Global Cache**: Cross-session caching for common queries
-- **Vector Similarity**: Semantic matching for cache hits on similar queries
-- **Report/Section Cache**: Two-level caching in Reporter with evidence fingerprinting
-
-### 5. Evidence Tracking
-
-EvidenceTracker maintains provenance:
-- Records all retrieval sources (chunk/entity/community/document)
-- Supports querying by type, source, granularity
-- Automatic deduplication and ranking
-- Used for citation generation and consistency checking
-
-## Important Patterns and Conventions
-
-### File Placement
-
-- Source documents: `files/` directory (supports nested structure)
-- Supported formats: TXT, PDF, MD, DOCX, DOC, CSV, JSON, YAML/YML
-
-### Agent Selection
-
-Choose agent based on query complexity:
-- Simple factual queries → **NaiveRagAgent** or **GraphAgent**
-- Queries needing relationship reasoning → **GraphAgent** or **HybridAgent**
-- Complex multi-step reasoning → **DeepResearchAgent**
-- Long-form structured reports → **FusionGraphRAGAgent** (Plan-Execute-Report)
-
-### Streaming Responses
-
-All agents implement `ask_stream()` for real-time streaming:
-- Checks fast cache first
-- For DeepResearch: use `show_thinking=True` to expose reasoning trace
-- Current implementation is "pseudo-streaming" (generate full answer, then stream chunks) due to LangChain version limitations
-
-### Working with Neo4j
-
-- Connection managed via `graphrag_agent/config/neo4jdb.py`
-- Use `GraphConnection` class for database operations
-- Entity/relation schemas defined in `settings.py`
-- Cypher queries abstracted in search tools
+## Known Issues & Compatibility
 
 ### Model Compatibility
+- **Tested & Working**: DeepSeek (20241226), GPT-4o
+- **Known Issues**:
+  - DeepSeek (20250324): Severe hallucination, entity extraction failures
+  - Qwen series: LangChain/LangGraph compatibility issues; use [Qwen-Agent](https://qwen.readthedocs.io/zh-cn/latest/framework/qwen_agent.html) instead
 
-Tested models:
-- ✅ **DeepSeek (20241226)**: Full support
-- ✅ **GPT-4o**: Full support
-- ⚠️ **DeepSeek (20250324)**: Hallucination issues, may fail entity extraction
-- ⚠️ **Qwen**: Can extract entities but LangChain/LangGraph compatibility issues
+### Embedding Disambiguation Limitation
+Due to embedding similarity, "优秀学生" (honor title) may be confused with "国家奖学金" (scholarship). Future work: Fine-tune embeddings for domain-specific distinctions.
 
-### Incremental Updates
+### Frontend Timeout for Deep Search
+For deep research queries, disable timeout in `frontend/utils/api.py`:
+```python
+response = requests.post(
+    f"{API_URL}/chat",
+    json={...},
+    # timeout=120  # Comment this out
+)
+```
 
-Use `incremental_update.py` for dynamic graph updates:
-- Tracks files via `file_registry.json`
-- Detects additions/modifications/deletions
-- Applies `conflict_strategy` for manual vs. auto edits
-- Smart entity merging via disambiguation and alignment
+## Development Guidelines
 
-## Common Development Tasks
+### File Registry
+`file_registry.json` tracks ingested documents for incremental updates. Do not manually edit.
 
-### Adding a New Search Tool
+### Cache Management
+- Session cache: `./cache/` (context-aware, conversation-scoped)
+- Global cache: `./cache/global/` (persistent across sessions)
+- Cache embedding provider: Configurable via `CACHE_EMBEDDING_PROVIDER` (openai / sentence_transformer)
 
-1. Create tool class in `graphrag_agent/search/tool/`
-2. Inherit from `BaseSearchTool` or relevant base class
-3. Implement `search()` and `search_stream()` methods
-4. Register tool in agent's `tools` list
-5. Update tool descriptions in `settings.py` if needed
+### Entity Quality Mechanisms
+- **Entity Disambiguation**: Maps mentions to canonical entities via string recall + vector reranking + NIL detection
+- **Entity Alignment**: Detects and resolves conflicts within canonical entities, preserving all relationships
 
-### Adding a New Agent
+### Performance Tuning
+Key `.env` parameters:
+```env
+MAX_WORKERS=4                # Thread pool size
+BATCH_SIZE=100               # General batch size
+ENTITY_BATCH_SIZE=50         # Entity operations
+CHUNK_BATCH_SIZE=100         # Text chunks
+EMBEDDING_BATCH_SIZE=64      # Vector generation
+GDS_MEMORY_LIMIT=6           # Neo4j GDS memory (GB)
+GDS_CONCURRENCY=4            # GDS parallelism
+```
 
-1. Create agent class in `graphrag_agent/agents/`
-2. Inherit from `BaseAgent`
-3. Override `_setup_graph()` or `_add_retrieval_edges()` for custom workflow
-4. Implement agent-specific nodes if needed
-5. Test with `test/search_without_stream.py` and `test/search_with_stream.py`
+### Adding New Agents
+1. Inherit from `BaseAgent`
+2. Implement `_setup_tools()` to return tool list
+3. Graph setup is handled by base class via `_setup_graph()`
+4. Override `ask()` and `ask_stream()` for custom behavior
 
-### Modifying Entity Extraction Schema
+### Graph Consistency
+Use `graphrag_agent/graph/graph_consistency_validator.py` to check and fix graph inconsistencies after bulk operations.
 
-1. Update `entity_types` and `relationship_types` in `settings.py`
-2. Adjust prompts in `graphrag_agent/config/prompt.py` if needed
-3. Rebuild graph with `python graphrag_agent/integrations/build/main.py`
+## Testing & Evaluation
 
-### Adding New Evaluation Metrics
+Evaluation framework in `graphrag_agent/evaluation/`:
+- **Metrics**: Answer quality, retrieval precision/recall, graph structure quality, deep research evaluation
+- **Preprocessing**: Question-answer pair generation
+- **Test harness**: See `graphrag_agent/evaluation/test/README.md`
 
-1. Create metric class in `graphrag_agent/evaluation/metrics/`
-2. Inherit from `BaseMetric`
-3. Implement `evaluate()` method
-4. Register in appropriate evaluator (answer/retrieval/graph/deep_search)
+Example test config in `test/search_with_stream.py`:
+```python
+TEST_CONFIG = {
+    "queries": ["旷课多少学时会被退学？", ...],
+    "max_wait_time": 300
+}
+```
 
-### Customizing Multi-Agent Behavior
+## Multi-Agent (Plan-Execute-Report) Details
 
-To customize Plan-Execute-Report:
-1. **Planning**: Modify `PlannerConfig` or implement custom planner components
-2. **Execution**: Adjust `WorkerCoordinator` execution modes or add custom executors
-3. **Reporting**: Configure `ReporterConfig` (Map-Reduce thresholds, reduce strategy, etc.)
-4. **Factory**: Use `MultiAgentFactory.create_default_bundle()` with custom components
+Located in `graphrag_agent/agents/multi_agent/`:
 
-## Troubleshooting
+**Plan Phase** (`planner/`):
+- Clarifier: Disambiguates user intent
+- TaskDecomposer: Breaks query into subtasks
+- PlanReviewer: Validates and optimizes plan
+- Output: `PlanSpec` (task graph with dependencies)
 
-### Graph Construction Issues
+**Execute Phase** (`executor/`):
+- WorkerCoordinator: Dispatches tasks based on signals (retrieval/research/reflection)
+- Records evidence and execution metadata
+- Output: `ExecutionRecord` list
 
-- If community detection fails (sllpa), switch to `community_algorithm = 'leiden'` in `settings.py`
-- For entity extraction failures: check model compatibility (use DeepSeek 20241226 or GPT-4o)
-- Missing dependencies for `.doc` files: install system packages per `requirements.txt` comments
+**Report Phase** (`reporter/`):
+- OutlineBuilder: Generates document structure
+- SectionWriter: Map-Reduce for long document generation
+- ConsistencyChecker: Validates evidence citations and logical coherence
+- Output: Final report with references
 
-### Performance Optimization
+**Integration** (`integration/`):
+- `LegacyCoordinatorFacade`: Provides same `process_query` interface as old coordinator for smooth migration
 
-- Increase `MAX_WORKERS` and `BATCH_SIZE` for parallel processing
-- Adjust `GDS_MEMORY_LIMIT` and `GDS_CONCURRENCY` for large graphs
-- Enable `enable_parallel_map = True` in Reporter for faster Map-Reduce
-- Use `CACHE_EMBEDDING_PROVIDER = 'sentence_transformer'` for local embedding to reduce API calls
+## Incremental Updates
 
-### Deep Search Timeout
+`graphrag_agent/integrations/build/incremental/`:
+- Detects file changes via `file_registry.json`
+- Supports additions, deletions, modifications
+- Conflict resolution strategies: `manual_first`, `auto_first`, `merge` (set in `settings.py` or `GRAPH_CONFLICT_STRATEGY` env var)
 
-- Disable frontend timeout in `frontend/utils/api.py` (comment out `timeout=120`)
-- For backend, adjust FastAPI `workers` in `server/main.py`
+## Community Detection
 
-## External Resources
+Two algorithms supported (set via `settings.py` or `GRAPH_COMMUNITY_ALGORITHM`):
+- **leiden**: Standard Leiden algorithm
+- **sllpa**: Speaker-Listener Label Propagation (fallback to Leiden if no communities detected)
 
-- [GraphRAG](https://github.com/microsoft/graphrag) - Microsoft's original GraphRAG framework
-- [LightRAG](https://github.com/HKUDS/LightRAG) - Lightweight knowledge-enhanced generation
-- [deep-searcher](https://github.com/zilliztech/deep-searcher) - Zilliz's private-domain semantic search
-- [Neo4j LLM Graph Builder](https://github.com/neo4j-labs/llm-graph-builder)
+Community summaries generated via LLM for global search context.
 
-## Notes
+## Documentation Standards
 
-- Current streaming is pseudo-streaming due to LangChain version constraints
-- Frontend examples configured in `settings.py` → `examples`
-- One-API gateway recommended for unified LLM API management
-- For Chinese chart display on Linux, install Chinese fonts (see `assets/start.md`)
+Each module has a `readme.md` explaining functionality. When adding features, update relevant readme.
