@@ -263,6 +263,10 @@ LANGSMITH_PROJECT = "xxx"
 pip install -e .
 ```
 
+## MinerU安装
+
+见[这个文件](./mineru.md)
+
 ## 知识图谱原始文件放置
 
 请将原始文件放入 `files/` 文件夹，支持有目录的存放。当前支持以下格式（采用简单分块，后续会优化处理方式）：

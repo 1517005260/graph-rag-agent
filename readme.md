@@ -12,7 +12,7 @@
 
 由Claude生成
 
-![svg](./assets/structure.svg)
+![svg](./assets/imgs/structure.svg)
 
 ## 📂 项目结构
 
@@ -105,7 +105,7 @@ graph-rag-agent/
 - [Jean - 用国产大模型 + LangChain + Neo4j 建图全过程](https://zhuanlan.zhihu.com/p/716089164)
 - [GraphRAG vs DeepSearch？GraphRAG 提出者给你答案](https://mp.weixin.qq.com/s/FOT4pkEPHJR8xFvcVk1YFQ)
 
-![svg](./assets/deepsearch.svg)
+![svg](./assets/imgs/deepsearch.svg)
 
 ## ✨ 项目亮点
 
@@ -184,15 +184,15 @@ graph-rag-agent/
 
 非调试模式下的问答：
 
-![no-debug](./assets/web-nodebug.png)
+![no-debug](./assets/imgs/web-nodebug.png)
 
 调试模式下的问答（包含轨迹追踪（langgraph节点）、命中的知识图谱与文档源内容，知识图谱推理问答等）：
 
-![debug1](./assets/web-debug1.png)
+![debug1](./assets/imgs/web-debug1.png)
 
-![debug2](./assets/web-debug2.png)
+![debug2](./assets/imgs/web-debug2.png)
 
-![debug3](./assets/web-debug3.png)
+![debug3](./assets/imgs/web-debug3.png)
 
 ### 终端测试输出：
 
