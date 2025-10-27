@@ -67,6 +67,47 @@ pywin32>=302
 textract==1.6.3  # Windows 无需安装
 ```
 
+## MinerU安装
+
+见[这个文件](./mineru.md)
+
+## MinerU 集成
+
+### 目录与环境约定
+
+- 项目根目录结构需保持：
+  ```
+  /path/to/workspace/
+  ├── graph-rag-agent/        # 当前工程
+  └── MinerU/                # 官方 MinerU 仓库
+  ```
+- Graphrag 项目使用 `conda activate graphrag`
+- MinerU 服务使用 `conda activate mineru`
+
+### MinerU 服务器启动
+
+1. 在 `graph-rag-agent` 目录内运行：
+   ```bash
+   conda activate mineru
+   cd ../graphrag-agent
+   python mineru_server.py
+   ```
+
+2. MinerU 默认监听 `http://localhost:8899`，解析结果写入 `graph-rag-agent/mineru_outputs/`。
+
+### Graphrag 侧配置
+
+1. 在 `graph-rag-agent/.env` 中补充 MinerU 相关变量（已在 `.env.example` 提供）：
+   ```env
+   DOCUMENT_PROCESSOR_MODE = 'mineru'  # legacy | mineru
+   MINERU_API_URL = 'http://localhost:8899'
+   MINERU_HOME = '../MinerU'
+   MINERU_OUTPUT_DIR = './mineru_outputs'
+   MINERU_TEMP_DIR = './.tmp/mineru_temp'
+   ```
+2. 传统模式(`legacy`)：仅处理 `files/` 目录中历史支持的文本格式。
+3. MinerU 模式(`mineru`)：将原始文件放入 `files/`，系统自动通过 MinerU 解析至 `mineru_outputs/`，并使用解析结果入库；图片分片会以占位符形式记录，前端可根据 `modal_segments` 中的 `image_relative_path` 加载。
+
 ## 环境变量配置 (.env)
 
 ### 配置说明
@@ -262,10 +303,6 @@ LANGSMITH_PROJECT = "xxx"
 ```bash
 pip install -e .
 ```
-
-## MinerU安装
-
-见[这个文件](./mineru.md)
 
 ## 知识图谱原始文件放置
 

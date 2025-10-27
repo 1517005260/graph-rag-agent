@@ -51,12 +51,62 @@ def _get_env_choice(key: str, choices: set[str], default: str) -> str:
     return value
 
 
+def _resolve_project_path(raw_value: Optional[str], default: str) -> Path:
+    """
+    将环境变量解析为相对于项目根目录的路径
+
+    Args:
+        raw_value: 环境变量值
+        default: 默认路径（可相对可绝对）
+
+    Returns:
+        Path: 解析后的绝对路径
+    """
+    base = PROJECT_ROOT
+    value = raw_value.strip() if raw_value and raw_value.strip() else default
+    path = Path(value)
+    if not path.is_absolute():
+        path = (base / path).resolve()
+    return path
+
+
 # ===== 基础路径设置 =====
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # graphrag_agent包目录
 PROJECT_ROOT = BASE_DIR.parent  # 项目根目录
 FILES_DIR = PROJECT_ROOT / "files"
 FILE_REGISTRY_PATH = PROJECT_ROOT / "file_registry.json"  # 文件注册表路径
+
+# ===== MinerU & 文档处理配置 =====
+
+DOCUMENT_PROCESSOR_MODE = os.getenv("DOCUMENT_PROCESSOR_MODE", "legacy").strip().lower()
+
+MINERU_API_URL = os.getenv("MINERU_API_URL", "http://localhost:8899").rstrip("/")
+MINERU_API_TIMEOUT = _get_env_int("MINERU_API_TIMEOUT", 300) or 300
+
+MINERU_HOST = os.getenv("MINERU_HOST", "0.0.0.0")
+MINERU_PORT = _get_env_int("MINERU_PORT", 8899) or 8899
+MINERU_WORKERS = _get_env_int("MINERU_WORKERS", 1) or 1
+
+MINERU_HOME = _resolve_project_path(os.getenv("MINERU_HOME"), "../MinerU")
+MINERU_OUTPUT_DIR = _resolve_project_path(os.getenv("MINERU_OUTPUT_DIR"), "./mineru_outputs")
+MINERU_TEMP_DIR = _resolve_project_path(os.getenv("MINERU_TEMP_DIR"), "./.tmp/mineru_temp")
+MINERU_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+MINERU_TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+MINERU_DEFAULT_BACKEND = os.getenv("MINERU_DEFAULT_BACKEND", "pipeline")
+MINERU_DEFAULT_PARSE_METHOD = os.getenv("MINERU_DEFAULT_PARSE_METHOD", "auto")
+MINERU_DEFAULT_LANG = os.getenv("MINERU_DEFAULT_LANG", "ch")
+MINERU_FORMULA_ENABLE = _get_env_bool("MINERU_FORMULA_ENABLE", True)
+MINERU_TABLE_ENABLE = _get_env_bool("MINERU_TABLE_ENABLE", True)
+
+MINERU_DUMP_MD = _get_env_bool("MINERU_DUMP_MD", True)
+MINERU_DUMP_CONTENT_LIST = _get_env_bool("MINERU_DUMP_CONTENT_LIST", True)
+MINERU_DUMP_MIDDLE_JSON = _get_env_bool("MINERU_DUMP_MIDDLE_JSON", False)
+MINERU_DUMP_MODEL_OUTPUT = _get_env_bool("MINERU_DUMP_MODEL_OUTPUT", False)
+
+MINERU_DEVICE_MODE = os.getenv("MINERU_DEVICE_MODE", "auto")
+MINERU_OUTPUT_RETENTION_HOURS = _get_env_int("MINERU_OUTPUT_RETENTION_HOURS", 24) or 24
 
 # ===== 知识库与系统参数 =====
 

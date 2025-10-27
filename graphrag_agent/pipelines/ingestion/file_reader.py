@@ -32,6 +32,17 @@ class FileReader:
             directory_path: 文件目录路径
         """
         self.directory_path = directory_path
+        self._supported_extensions = {
+            '.txt': self._read_txt,
+            '.pdf': self._read_pdf,
+            '.md': self._read_markdown,
+            '.docx': self._read_docx,
+            '.doc': self._read_doc,
+            '.csv': self._read_csv,
+            '.json': self._read_json,
+            '.yaml': self._read_yaml,
+            '.yml': self._read_yaml,
+        }
         
     def read_files(self, file_extensions: Optional[List[str]] = None, recursive: bool = True) -> List[Tuple[str, str]]:
         """
@@ -44,17 +55,7 @@ class FileReader:
         Returns:
             List[Tuple[str, str]]: 文件名和内容的元组列表
         """
-        supported_extensions = {
-            '.txt': self._read_txt,
-            '.pdf': self._read_pdf,
-            '.md': self._read_markdown,
-            '.docx': self._read_docx,
-            '.doc': self._read_doc,
-            '.csv': self._read_csv,
-            '.json': self._read_json,
-            '.yaml': self._read_yaml,
-            '.yml': self._read_yaml,
-        }
+        supported_extensions = self._supported_extensions
         
         # 如未指定扩展名，则使用所有支持的扩展名
         if file_extensions is None:
@@ -398,6 +399,29 @@ class FileReader:
             print(f"读取YAML文件为字典时出错: {str(e)}")
             return {}
     
+    @property
+    def supported_extensions(self) -> List[str]:
+        """返回支持的文件扩展名列表"""
+        return list(self._supported_extensions.keys())
+
+    def read_file(self, relative_path: str) -> Tuple[str, str]:
+        """
+        读取单个文件
+
+        Args:
+            relative_path: 相对于根目录的路径
+
+        Returns:
+            Tuple[str, str]: (相对路径, 内容)
+        """
+        full_path = os.path.join(self.directory_path, relative_path)
+        ext = os.path.splitext(relative_path)[1].lower()
+        reader = self._supported_extensions.get(ext)
+        if reader is None:
+            raise ValueError(f"不支持的文件类型: {ext}")
+        content = reader(full_path)
+        return relative_path, content
+
     def read_txt_files(self) -> List[Tuple[str, str]]:
         """读取所有txt文件"""
         return self.read_files(['.txt'])
