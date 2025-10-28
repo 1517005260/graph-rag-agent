@@ -86,6 +86,8 @@ textract==1.6.3  # Windows 无需安装
 
 ### MinerU 服务器启动
 
+0. 推荐配置：存储20G以上，显存8G以上再使用MinerU进行解析，可以通过auto-dl平台，ssh隧道的功能映射到本地。如果配置不足，MinerU解析会很慢，不建议使用。
+
 1. 在 `graph-rag-agent` 目录内运行：
    ```bash
    conda activate mineru
@@ -107,6 +109,8 @@ textract==1.6.3  # Windows 无需安装
    ```
 2. 传统模式(`legacy`)：仅处理 `files/` 目录中历史支持的文本格式。
 3. MinerU 模式(`mineru`)：将原始文件放入 `files/`，系统自动通过 MinerU 解析至 `mineru_outputs/`，并使用解析结果入库；图片分片会以占位符形式记录，前端可根据 `modal_segments` 中的 `image_relative_path` 加载。
+4. 开启MinerU模式解析时，服务器必须启动，否则自动回退到legacy模式。
+5. MinerU 的解析结果会缓存在 `cache/mineru_registry.json` 与 `cache/mineru_cache/` 下，同一文件在内容和解析参数均未变化时不会重复调用 MinerU。如果需要强制重解析，可删除对应缓存文件或清空上述目录。
 
 ## 环境变量配置 (.env)
 
@@ -116,7 +120,7 @@ textract==1.6.3  # Windows 无需安装
 
 ### 必选配置项
 
-以下配置为必填项，项目无法运行时需首先检查这些配置：
+以下配置为必填项，项目无法运行时需首先检查这些配置（具体含义可见文件里的注释）：
 
 ```env
 # ===== LLM 模型配置 =====
@@ -144,7 +148,7 @@ CACHE_SENTENCE_TRANSFORMER_MODEL = 'all-MiniLM-L6-v2'
 # ===== 并发与性能配置 =====
 # 根据机器性能调整，4核CPU推荐值如下
 FASTAPI_WORKERS = 2
-MAX_WORKERS = 4
+MAX_WORKERS = 4  # 如果one-api出现“上游负载等”的报错，可以把这个改成2
 MA_WORKER_EXECUTION_MODE = 'parallel'
 MA_WORKER_MAX_CONCURRENCY = 4
 BATCH_SIZE = 100
@@ -306,7 +310,7 @@ pip install -e .
 
 ## 知识图谱原始文件放置
 
-请将原始文件放入 `files/` 文件夹，支持有目录的存放。当前支持以下格式（采用简单分块，后续会优化处理方式）：
+请将原始文件放入 `files/` 文件夹，支持有目录的存放。`legacy`模式支持以下格式（采用简单分块）：
 
 ```
 - TXT（纯文本）
@@ -317,6 +321,23 @@ pip install -e .
 - CSV（表格）
 - JSON（结构化文本）
 - YAML/YML（配置文件）
+```
+
+`mineru`模式采用ocr解析，统一解析为`markdown`文件，还支持以下文件：
+
+```
+MINERU_SUPPORTED_SUFFIXES = {
+        ".pdf",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".bmp",
+        ".tiff",
+        ".tif",
+        ".gif",
+        ".webp",
+        ".jp2",
+    }
 ```
 
 ## 知识图谱实体与关系配置
@@ -366,6 +387,8 @@ community_algorithm = "leiden"
 
 ```bash
 cd graph-rag-agent/
+
+# 如果采用MinerU解析，需要先 python mineru_server.py
 
 # 初始全量构建
 python graphrag_agent/integrations/build/main.py

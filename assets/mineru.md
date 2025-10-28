@@ -25,12 +25,15 @@ mineru -v
 mineru, version 2.6.2
 ```
 
+> 提示：本项目默认在启动脚本和配置中将 `MINERU_MODEL_SOURCE` 设为 `modelscope`，确保模型使用国内镜像。如果需要切换回 Hugging Face，可在运行 MinerU 相关命令前自行导出 `export MINERU_MODEL_SOURCE=huggingface`。
+
 # 解析模型下载
 
 ```bash
+export MINERU_MODEL_SOURCE=modelscope  # 如已在外部环境设置可忽略
 mineru-models-download
 
-# 之后选择 modelscope 和 all
+# 交互式下载时请选择 modelscope，并勾选 all
 ```
 
 ## 简单测试使用
@@ -269,3 +272,7 @@ INFO:     Started server process [12146]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 ```
+
+## 本项目的MinerU服务器
+
+已封装在`graph-rag-agent/mineru_server.py`，直接运行启动即可。

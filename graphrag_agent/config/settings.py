@@ -97,6 +97,13 @@ MINERU_TEMP_DIR = _resolve_project_path(os.getenv("MINERU_TEMP_DIR"), "./.tmp/mi
 MINERU_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 MINERU_TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
+MINERU_CACHE_REGISTRY_PATH = _resolve_project_path(
+    os.getenv("MINERU_CACHE_REGISTRY"), "./cache/mineru_registry.json"
+)
+MINERU_CACHE_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+MINERU_CACHE_DATA_DIR = (MINERU_CACHE_REGISTRY_PATH.parent / "mineru_cache").resolve()
+MINERU_CACHE_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 MINERU_DEFAULT_BACKEND = os.getenv("MINERU_DEFAULT_BACKEND", "pipeline")
 MINERU_DEFAULT_PARSE_METHOD = os.getenv("MINERU_DEFAULT_PARSE_METHOD", "auto")
 MINERU_DEFAULT_LANG = os.getenv("MINERU_DEFAULT_LANG", "ch")

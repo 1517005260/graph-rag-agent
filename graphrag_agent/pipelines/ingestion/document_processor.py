@@ -2,6 +2,7 @@ import json
 import os
 import hashlib
 import re
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Set
@@ -18,11 +19,128 @@ from graphrag_agent.config.settings import (
     MINERU_FORMULA_ENABLE,
     MINERU_OUTPUT_DIR,
     MINERU_TABLE_ENABLE,
+    MINERU_CACHE_REGISTRY_PATH,
+    MINERU_CACHE_DATA_DIR,
     OVERLAP,
 )
 from graphrag_agent.pipelines.ingestion.file_reader import FileReader
 from graphrag_agent.pipelines.ingestion.text_chunker import ChineseTextChunker
 from graphrag_agent.pipelines.mineru_client import MinerUClient, ParseOptions, ParseResult
+
+
+MINERU_CACHE_VERSION = "1.0"
+
+
+class MinerUParseCache:
+    """MinerU 解析结果缓存管理"""
+
+    def __init__(self, registry_path: Path, data_dir: Path):
+        self.registry_path = Path(registry_path)
+        self.data_dir = Path(data_dir)
+        self.registry_path.parent.mkdir(parents=True, exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self._registry: Dict[str, Dict[str, Any]] = self._load_registry()
+
+    def _load_registry(self) -> Dict[str, Dict[str, Any]]:
+        if self.registry_path.exists():
+            try:
+                with open(self.registry_path, "r", encoding="utf-8") as fp:
+                    return json.load(fp)
+            except Exception:
+                return {}
+        return {}
+
+    def _save_registry(self) -> None:
+        try:
+            with open(self.registry_path, "w", encoding="utf-8") as fp:
+                json.dump(self._registry, fp, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            print(f"写入 MinerU 缓存注册表失败: {exc}")
+
+    def load(self, relative_path: str, file_hash: str, option_signature: Optional[str]) -> Optional[Dict[str, Any]]:
+        entry = self._registry.get(relative_path)
+        if not entry:
+            return None
+
+        if entry.get("file_hash") != file_hash:
+            return None
+
+        if entry.get("cache_version") != MINERU_CACHE_VERSION:
+            return None
+
+        if option_signature and entry.get("options_signature") != option_signature:
+            return None
+
+        data_file = entry.get("data_file")
+        if not data_file:
+            return None
+
+        data_path = Path(data_file)
+        if not data_path.is_absolute():
+            data_path = self.data_dir / data_file
+
+        if not data_path.exists():
+            return None
+
+        try:
+            with open(data_path, "r", encoding="utf-8") as fp:
+                payload = json.load(fp)
+            entry["last_accessed"] = time.time()
+            self._registry[relative_path] = entry
+            self._save_registry()
+            return {
+                "payload": payload,
+                "metadata": entry,
+                "data_path": str(data_path),
+            }
+        except Exception as exc:
+            print(f"读取 MinerU 缓存失败 ({data_path}): {exc}")
+            return None
+
+    def store(
+        self,
+        relative_path: str,
+        file_hash: str,
+        option_signature: Optional[str],
+        payload: Dict[str, Any],
+    ) -> None:
+        cache_key = file_hash
+        cache_filename = f"{cache_key}.json"
+        data_path = self.data_dir / cache_filename
+
+        try:
+            with open(data_path, "w", encoding="utf-8") as fp:
+                json.dump(payload, fp, ensure_ascii=False)
+        except Exception as exc:
+            print(f"写入 MinerU 缓存失败 ({data_path}): {exc}")
+            return
+
+        entry = {
+            "file_hash": file_hash,
+            "data_file": cache_filename,
+            "cache_version": MINERU_CACHE_VERSION,
+            "options_signature": option_signature,
+            "stored_at": time.time(),
+            "last_accessed": time.time(),
+        }
+
+        # 记录关键元数据，便于调试
+        for key in [
+            "mineru_task_id",
+            "mineru_output_dir",
+            "markdown_path",
+            "content_list_path",
+        ]:
+            if payload.get(key):
+                entry[key] = payload[key]
+
+        self._registry[relative_path] = entry
+        self._save_registry()
+
+    def invalidate(self, relative_path: str) -> None:
+        if relative_path in self._registry:
+            del self._registry[relative_path]
+            self._save_registry()
 
 
 class DocumentProcessor:
@@ -61,6 +179,8 @@ class DocumentProcessor:
 
         self.mineru_client: Optional[MinerUClient] = None
         self._mineru_options: Optional[ParseOptions] = None
+        self.mineru_cache: Optional[MinerUParseCache] = None
+        self._mineru_option_signature: Optional[str] = None
         if self.mode == "mineru":
             self._init_mineru()
 
@@ -76,11 +196,15 @@ class DocumentProcessor:
                 table_enable=MINERU_TABLE_ENABLE,
                 output_format="mm_md",
             )
+            self._mineru_option_signature = self._build_option_signature(self._mineru_options)
+            self.mineru_cache = MinerUParseCache(MINERU_CACHE_REGISTRY_PATH, MINERU_CACHE_DATA_DIR)
         except Exception as exc:
             print(f"初始化 MinerU 客户端失败: {exc}，自动回退至 legacy 模式。")
             self.mode = "legacy"
             self.mineru_client = None
             self._mineru_options = None
+            self._mineru_option_signature = None
+            self.mineru_cache = None
 
     # ====== 公共接口 ======
     def process_directory(
@@ -99,9 +223,35 @@ class DocumentProcessor:
         results: List[Dict[str, Any]] = []
         for relative_path in selected_files:
             extension = Path(relative_path).suffix.lower()
+            full_path = Path(self.directory_path) / relative_path
+            file_hash: Optional[str] = None
             try:
                 if self._should_use_mineru(extension):
-                    result = self._process_file_with_mineru(relative_path, extension)
+                    if not full_path.exists():
+                        raise FileNotFoundError(f"文件不存在: {full_path}")
+
+                    file_hash = self._compute_file_hash(full_path)
+                    cached_entry = None
+                    if file_hash and self.mineru_cache:
+                        cached_entry = self.mineru_cache.load(
+                            relative_path,
+                            file_hash,
+                            self._mineru_option_signature,
+                        )
+
+                    if cached_entry:
+                        result = self._process_file_with_cached_mineru(
+                            relative_path,
+                            extension,
+                            cached_entry,
+                            file_hash,
+                        )
+                    else:
+                        result = self._process_file_with_mineru(
+                            relative_path,
+                            extension,
+                            file_hash=file_hash,
+                        )
                 else:
                     result = self._process_file_legacy(relative_path, extension)
             except Exception as exc:
@@ -111,6 +261,7 @@ class DocumentProcessor:
                     "extension": extension,
                     "processing_mode": "error",
                     "error": str(exc),
+                    "file_hash": file_hash,
                 }
                 print(f"处理文件 {relative_path} 失败: {exc}")
 
@@ -181,6 +332,30 @@ class DocumentProcessor:
         }
         return extension_types.get(extension.lower(), "未知类型")
 
+    def _build_option_signature(self, options: Optional[ParseOptions]) -> Optional[str]:
+        if options is None:
+            return None
+        try:
+            options_dict = asdict(options)
+        except TypeError:
+            options_dict = {
+                "backend": options.backend,
+                "parse_method": options.parse_method,
+                "lang": options.lang,
+                "formula_enable": options.formula_enable,
+                "table_enable": options.table_enable,
+                "start_page": options.start_page,
+                "end_page": options.end_page,
+                "output_format": getattr(options, "output_format", "mm_md"),
+            }
+
+        payload = {
+            "options": options_dict,
+            "cache_version": MINERU_CACHE_VERSION,
+        }
+        serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
+
     # ====== 内部逻辑 ======
     def _collect_files(self, file_extensions: Optional[List[str]], recursive: bool) -> List[str]:
         files = self.file_reader.list_all_files(recursive=recursive)
@@ -203,6 +378,17 @@ class DocumentProcessor:
 
         selected.sort()
         return selected
+
+    def _compute_file_hash(self, file_path: Path) -> Optional[str]:
+        hash_obj = hashlib.sha256()
+        try:
+            with open(file_path, "rb") as fp:
+                for chunk in iter(lambda: fp.read(8192), b""):
+                    hash_obj.update(chunk)
+            return hash_obj.hexdigest()
+        except Exception as exc:
+            print(f"计算文件哈希失败 ({file_path}): {exc}")
+            return None
 
     def _should_use_mineru(self, extension: str) -> bool:
         return (
@@ -258,6 +444,7 @@ class DocumentProcessor:
         self,
         relative_path: str,
         extension: str,
+        file_hash: Optional[str] = None,
     ) -> Dict[str, Any]:
         """使用 MinerU 进行高级解析"""
         assert self.mineru_client is not None and self._mineru_options is not None
@@ -272,6 +459,9 @@ class DocumentProcessor:
 
         if not full_path.exists():
             raise FileNotFoundError(f"文件不存在: {full_path}")
+
+        if file_hash is None:
+            file_hash = self._compute_file_hash(full_path)
 
         try:
             parse_result = self.mineru_client.parse_file(
@@ -330,6 +520,91 @@ class DocumentProcessor:
         result["mineru_output_dir"] = parse_result.output_dir
         result["markdown_path"] = parse_result.markdown_path
         result["content_list_path"] = parse_result.content_list_path
+        result["cache_hit"] = False
+        result["file_hash"] = file_hash
+
+        if self.mineru_cache and file_hash:
+            cache_payload = {
+                "content": rich_text,
+                "modal_segments": segments,
+                "mineru_result": asdict(parse_result),
+                "mineru_task_id": parse_result.task_id,
+                "mineru_output_dir": parse_result.output_dir,
+                "markdown_path": parse_result.markdown_path,
+                "content_list_path": parse_result.content_list_path,
+                "image_assets": result.get("image_assets", []),
+                "original_filename": result.get("original_filename"),
+                "processing_mode": "mineru",
+            }
+            self.mineru_cache.store(
+                relative_path,
+                file_hash,
+                self._mineru_option_signature,
+                cache_payload,
+            )
+
+        return result
+
+    def _process_file_with_cached_mineru(
+        self,
+        relative_path: str,
+        extension: str,
+        cache_entry: Dict[str, Any],
+        file_hash: Optional[str],
+    ) -> Dict[str, Any]:
+        payload = cache_entry.get("payload") if cache_entry else None
+        if not payload:
+            raise ValueError("缓存数据缺失，无法使用 MinerU 缓存结果")
+
+        segments = payload.get("modal_segments") or payload.get("segments") or []
+        rich_text = payload.get("content") or ""
+
+        result: Dict[str, Any] = {
+            "filepath": relative_path,
+            "filename": Path(relative_path).name,
+            "extension": extension,
+            "processing_mode": "mineru_cache",
+        }
+
+        result["content"] = rich_text
+        result["content_length"] = len(rich_text)
+
+        chunks = self.chunker.chunk_text(rich_text) if rich_text else []
+        result["chunks"] = chunks
+        result["chunk_count"] = len(chunks)
+        chunk_texts = ["".join(chunk) for chunk in chunks]
+        chunk_lengths = [len(text) for text in chunk_texts]
+        result["chunk_lengths"] = chunk_lengths
+        result["average_chunk_length"] = (
+            sum(chunk_lengths) / len(chunk_lengths) if chunk_lengths else 0
+        )
+
+        self._finalize_modal_structure(
+            result,
+            rich_text,
+            segments,
+            chunk_texts,
+            source="mineru_cache",
+        )
+
+        mineru_result = payload.get("mineru_result")
+        if mineru_result:
+            result["mineru_result"] = mineru_result
+
+        result["original_filename"] = payload.get("original_filename") or Path(relative_path).name
+        result["mineru_task_id"] = payload.get("mineru_task_id") or (mineru_result or {}).get("task_id")
+        result["mineru_output_dir"] = payload.get("mineru_output_dir") or (mineru_result or {}).get("output_dir")
+        result["markdown_path"] = payload.get("markdown_path") or (mineru_result or {}).get("markdown_path")
+        result["content_list_path"] = payload.get("content_list_path") or (mineru_result or {}).get("content_list_path")
+        if "image_assets" in payload:
+            result["image_assets"] = payload["image_assets"]
+
+        result["cache_hit"] = True
+        result["file_hash"] = file_hash
+        if cache_entry.get("metadata"):
+            result["cache_metadata"] = cache_entry["metadata"]
+        if cache_entry.get("data_path"):
+            result["cache_data_path"] = cache_entry["data_path"]
 
         return result
 
