@@ -44,12 +44,15 @@ graphrag_agent/graph/
 - `__Document__`：文档节点，代表一个完整的文档
 - `__Chunk__`：文本块节点，文档的片段
 - `__Entity__`：实体节点，从文本中提取的概念、对象等
+- `__ModalSegment__`：多模态段落节点，承载 MinerU 抽取出的文本、图片、表格、公式等片段
 
 节点之间的关系包括：
 - `PART_OF`：Chunk与Document间的从属关系
 - `NEXT_CHUNK`：文本块之间的顺序关系
 - `MENTIONS`：文本块与实体间的提及关系
 - `SIMILAR`：实体之间的相似关系
+- `HAS_MODAL_SEGMENT`：Document 与多模态段落之间的归属关系
+- `HAS_MODAL`：Chunk 与多模态段落之间的内容映射关系
 
 ### 2. 图谱构建流程
 
@@ -86,9 +89,15 @@ result = graph.query("MATCH (n) RETURN count(n) as count")
 `GraphStructureBuilder`负责创建文档和文本块节点，并建立它们之间的结构关系：
 
 ```python
+processor_result = document_processor.process_directory()[0]
 builder = GraphStructureBuilder()
-builder.create_document(type="text", uri="path/to/doc", file_name="example.txt", domain="test")
-chunks_with_hash = builder.create_relation_between_chunks(file_name, chunks)
+builder.create_document(type="text", uri="path/to/doc", file_name=processor_result["filename"], domain="test")
+chunks_with_hash = builder.create_relation_between_chunks(
+    processor_result["filename"],
+    processor_result["chunks"],
+    chunk_annotations=processor_result.get("chunk_annotations"),
+    segments=processor_result.get("modal_segments"),
+)
 ```
 
 ### 实体关系提取

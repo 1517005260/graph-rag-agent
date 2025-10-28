@@ -198,7 +198,9 @@ class IncrementalGraphUpdater:
                             self.console.print(f"[blue]为文件 {doc['filename']} 创建 {chunks_count} 个文本块节点[/blue]")
                             doc["graph_result"] = self.struct_builder.create_relation_between_chunks(
                                 doc["filename"],
-                                doc["chunks"]
+                                doc["chunks"],
+                                chunk_annotations=doc.get("chunk_annotations"),
+                                segments=doc.get("modal_segments"),
                             )
                     
                     # 6. 准备实体抽取的数据

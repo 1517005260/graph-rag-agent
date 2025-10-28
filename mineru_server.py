@@ -122,6 +122,12 @@ class MinerUConfig:
     @classmethod
     def setup_environment(cls):
         """设置 MinerU 环境变量"""
+        if os.getenv('MINERU_MODEL_SOURCE') is None:
+            os.environ['MINERU_MODEL_SOURCE'] = 'modelscope'
+            logger.info("MINERU_MODEL_SOURCE 未设置，默认使用 modelscope")
+        else:
+            logger.info(f"MINERU_MODEL_SOURCE: {os.environ['MINERU_MODEL_SOURCE']}")
+
         # 设置设备模式
         if os.getenv('MINERU_DEVICE_MODE') is None:
             device = cls.DEVICE_MODE if cls.DEVICE_MODE != 'auto' else get_device()

@@ -63,6 +63,7 @@ chunks = chunker.chunk_text(text_content)
 - 生成文件统计信息（类型分布、内容长度等）
 - 对每个文件进行分块处理
 - 收集处理结果和错误信息
+- 兼容 `legacy` 与 `mineru` 两种解析策略，并统一输出多模态结构化结果
 
 ```python
 # 使用示例
@@ -70,6 +71,15 @@ processor = DocumentProcessor(directory_path)
 stats = processor.get_file_stats()  # 获取文件统计信息
 results = processor.process_directory()  # 处理目录下所有支持的文件
 ```
+
+在 MinerU 模式下，处理结果将包含以下关键字段，供图谱层和前端直接使用：
+
+- `modal_segments`：带有 `segment_id`、`type`、`text`、`image_relative_path`、`table_html`、`latex` 等信息的多模态段落列表
+- `chunk_annotations`：每个分块对应的段落引用信息，含 `segment_ids`、`segment_types`、`char_start`/`char_end`
+- `image_assets`：所有抽取出的图片相对路径集合，可用于静态资源加载
+- `mineru_task_id`、`mineru_output_dir`、`content_list_path`：MinerU 解析任务的回溯信息
+
+即便运行在 `legacy` 模式，以上字段也会以降级策略补齐（例如直接将分块视作文本段落），保证后续图谱构建流程的兼容性。
 
 ## 核心函数
 

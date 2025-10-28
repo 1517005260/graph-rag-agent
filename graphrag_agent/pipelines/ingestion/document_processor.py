@@ -1,8 +1,10 @@
 import json
 import os
+import hashlib
+import re
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 from graphrag_agent.config.settings import (
     CHUNK_SIZE,
@@ -232,12 +234,20 @@ class DocumentProcessor:
             result["chunks"] = chunks
             result["chunk_count"] = len(chunks)
 
-            chunk_lengths = [len("".join(chunk)) for chunk in chunks]
+            chunk_texts = ["".join(chunk) for chunk in chunks]
+            chunk_lengths = [len(text) for text in chunk_texts]
             result["chunk_lengths"] = chunk_lengths
             result["average_chunk_length"] = (
                 sum(chunk_lengths) / len(chunk_lengths) if chunk_lengths else 0
             )
-            result["chunk_texts"] = ["".join(chunk) for chunk in chunks]
+
+            self._finalize_modal_structure(
+                result,
+                content,
+                segments=None,
+                chunk_texts=chunk_texts,
+                source="legacy",
+            )
         except Exception as exc:
             result["chunk_error"] = str(exc)
             print(f"分块错误 ({relative_path}): {exc}")
@@ -299,21 +309,23 @@ class DocumentProcessor:
         chunks = self.chunker.chunk_text(rich_text) if rich_text else []
         result["chunks"] = chunks
         result["chunk_count"] = len(chunks)
-        chunk_lengths = [len("".join(chunk)) for chunk in chunks]
+        chunk_texts = ["".join(chunk) for chunk in chunks]
+        chunk_lengths = [len(text) for text in chunk_texts]
         result["chunk_lengths"] = chunk_lengths
         result["average_chunk_length"] = (
             sum(chunk_lengths) / len(chunk_lengths) if chunk_lengths else 0
         )
-        result["chunk_texts"] = ["".join(chunk) for chunk in chunks]
 
-        result["modal_segments"] = segments
+        self._finalize_modal_structure(
+            result,
+            rich_text,
+            segments,
+            chunk_texts,
+            source="mineru",
+        )
+
         result["mineru_result"] = asdict(parse_result)
         result["original_filename"] = parse_result.original_filename or parse_result.filename
-        result["image_assets"] = [
-            segment["image_relative_path"]
-            for segment in segments
-            if segment.get("image_relative_path")
-        ]
         result["mineru_task_id"] = parse_result.task_id
         result["mineru_output_dir"] = parse_result.output_dir
         result["markdown_path"] = parse_result.markdown_path
@@ -359,13 +371,21 @@ class DocumentProcessor:
             "type": item.get("type", "unknown"),
             "raw": item,
         }
+        segment["source"] = "mineru"
+        segment["page_idx"] = item.get("page_idx")
+        segment["bbox"] = item.get("bbox")
 
         item_type = segment["type"].lower()
         if item_type == "text":
-            segment["text"] = (item.get("text") or "").strip()
+            raw_text = item.get("text") or ""
+            segment["text"] = raw_text.strip()
+            segment["text_raw"] = raw_text
         elif item_type == "equation":
             latex = item.get("text") or ""
             segment["text"] = f"[公式]\n{latex.strip()}"
+            segment["latex"] = latex.strip()
+            if item.get("text_format"):
+                segment["text_format"] = item.get("text_format")
         elif item_type == "table":
             caption = " ".join(item.get("table_caption", [])).strip()
             table_body = item.get("table_body") or ""
@@ -375,6 +395,9 @@ class DocumentProcessor:
             if table_body:
                 parts.append(table_body)
             segment["text"] = "\n".join(parts).strip()
+            segment["table_html"] = table_body
+            segment["table_caption"] = caption
+            segment["table_footnote"] = item.get("table_footnote") or []
         elif item_type == "image":
             placeholder = "[图片]"
             caption = " ".join(item.get("image_caption", [])).strip()
@@ -402,6 +425,8 @@ class DocumentProcessor:
             if caption:
                 parts.append(caption)
             segment["text"] = " ".join(parts).strip()
+            segment["image_caption"] = item.get("image_caption") or []
+            segment["image_footnote"] = item.get("image_footnote") or []
         else:
             text = item.get("text") or item.get("raw_text") or ""
             if text:
@@ -410,6 +435,249 @@ class DocumentProcessor:
                 segment["text"] = ""
 
         return segment
+
+    def _finalize_modal_structure(
+        self,
+        result: Dict[str, Any],
+        rich_text: Optional[str],
+        segments: Optional[List[Dict[str, Any]]],
+        chunk_texts: Optional[List[str]],
+        source: str,
+    ) -> None:
+        """统一整理分段与分块的多模态元数据"""
+        rich_text = rich_text or ""
+        chunk_texts = chunk_texts or []
+
+        segment_candidates = segments or []
+        if not segment_candidates and chunk_texts:
+            segment_candidates = self._build_segments_from_chunks(chunk_texts, source)
+
+        prepared_segments = self._prepare_segments(
+            result.get("filepath") or result.get("filename") or "",
+            segment_candidates,
+            rich_text,
+            default_source=source,
+        )
+        segment_map = {segment["segment_id"]: segment for segment in prepared_segments}
+        chunk_annotations = self._build_chunk_annotations(chunk_texts, prepared_segments, segment_map)
+
+        result["modal_segments"] = prepared_segments
+        result["segment_count"] = len(prepared_segments)
+        result["chunk_texts"] = chunk_texts
+        result["chunk_annotations"] = chunk_annotations
+        result["chunk_modal_types"] = [item.get("segment_types", []) for item in chunk_annotations]
+        result["chunk_modal_segment_ids"] = [item.get("segment_ids", []) for item in chunk_annotations]
+
+        result["image_assets"] = [
+            segment.get("image_relative_path")
+            for segment in prepared_segments
+            if segment.get("image_relative_path")
+        ]
+        result["image_segment_count"] = len(result["image_assets"])
+        result["equation_segment_count"] = sum(
+            1 for segment in prepared_segments if segment.get("type") == "equation"
+        )
+        result["table_segment_count"] = sum(
+            1 for segment in prepared_segments if segment.get("type") == "table"
+        )
+
+    def _prepare_segments(
+        self,
+        filename: str,
+        segments: List[Dict[str, Any]],
+        rich_text: str,
+        default_source: str,
+    ) -> List[Dict[str, Any]]:
+        """为段落补全ID、顺序、字符位置信息"""
+        prepared: List[Dict[str, Any]] = []
+        seen_ids: Set[str] = set()
+        doc_key = filename or "document"
+
+        for index, raw_segment in enumerate(segments):
+            segment = dict(raw_segment)
+            segment_type = (segment.get("type") or "text").lower()
+            text_value = segment.get("text") or ""
+
+            segment["type"] = segment_type
+            segment["text"] = text_value
+            segment["segment_index"] = index
+            segment["source"] = segment.get("source") or default_source
+            if segment.get("page_index") is not None and segment.get("page_idx") is None:
+                segment["page_idx"] = segment["page_index"]
+
+            segment_id = segment.get("segment_id")
+            if not segment_id:
+                seed = f"{doc_key}|{index}|{segment_type}|{text_value[:64]}"
+                segment_id = hashlib.sha1(seed.encode("utf-8")).hexdigest()
+
+            candidate_id = segment_id
+            duplicate_counter = 1
+            while candidate_id in seen_ids:
+                duplicate_counter += 1
+                candidate_id = f"{segment_id}_{duplicate_counter}"
+
+            segment["segment_id"] = candidate_id
+            seen_ids.add(candidate_id)
+            segment["char_length"] = len(text_value)
+
+            prepared.append(segment)
+
+        self._compute_segment_positions(prepared, rich_text)
+        return prepared
+
+    def _compute_segment_positions(self, segments: List[Dict[str, Any]], rich_text: str) -> None:
+        """估算段落在全文中的字符偏移"""
+        if not rich_text:
+            for segment in segments:
+                segment["char_start"] = None
+                segment["char_end"] = None
+            return
+
+        current_pos = 0
+        for segment in segments:
+            text_value = (segment.get("text") or "").strip()
+            if not text_value:
+                segment["char_start"] = None
+                segment["char_end"] = None
+                continue
+
+            position = rich_text.find(text_value, current_pos)
+            if position == -1:
+                position = rich_text.find(text_value)
+            if position == -1:
+                segment["char_start"] = None
+                segment["char_end"] = None
+                continue
+
+            segment["char_start"] = position
+            segment["char_end"] = position + len(text_value)
+            current_pos = segment["char_end"]
+
+    @staticmethod
+    def _normalize_alignment_text(text: str) -> str:
+        """对齐映射时去除空白字符"""
+        if not text:
+            return ""
+        return re.sub(r"\s+", "", text)
+
+    def _build_chunk_annotations(
+        self,
+        chunk_texts: List[str],
+        segments: List[Dict[str, Any]],
+        segment_map: Dict[str, Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """根据分块长度映射段落，生成多模态引用信息"""
+        if not chunk_texts:
+            return []
+
+        normalized_segments: List[Dict[str, Any]] = []
+        for segment in segments:
+            normalized_text = self._normalize_alignment_text(segment.get("text") or "")
+            normalized_segments.append(
+                {
+                    "segment_id": segment["segment_id"],
+                    "length": len(normalized_text),
+                    "type": segment.get("type"),
+                    "source": segment.get("source"),
+                }
+            )
+
+        annotations: List[Dict[str, Any]] = []
+        segment_index = 0
+        segment_consumed = 0
+
+        for chunk_text in chunk_texts:
+            normalized_chunk = self._normalize_alignment_text(chunk_text or "")
+            chunk_length = len(normalized_chunk)
+            if chunk_length <= 0:
+                annotations.append(
+                    {"segment_ids": [], "segment_types": [], "segment_sources": [], "char_start": None, "char_end": None}
+                )
+                continue
+
+            remaining = chunk_length
+            chunk_segments: List[str] = []
+            chunk_types: List[str] = []
+            chunk_sources: List[str] = []
+
+            while remaining > 0 and segment_index < len(normalized_segments):
+                current_segment = normalized_segments[segment_index]
+                segment_length = current_segment["length"] or 1
+                available = segment_length - segment_consumed
+
+                if available <= 0:
+                    segment_index += 1
+                    segment_consumed = 0
+                    continue
+
+                if current_segment["segment_id"] not in chunk_segments:
+                    chunk_segments.append(current_segment["segment_id"])
+                    chunk_types.append(current_segment["type"])
+                    chunk_sources.append(current_segment["source"])
+
+                consumed = min(available, remaining)
+                remaining -= consumed
+                segment_consumed += consumed
+
+                if segment_consumed >= segment_length:
+                    segment_index += 1
+                    segment_consumed = 0
+
+            annotations.append(
+                {
+                    "segment_ids": chunk_segments,
+                    "segment_types": chunk_types,
+                    "segment_sources": chunk_sources,
+                }
+            )
+
+        # 如果还有剩余的段落，将其附加到最后一个块
+        if segment_index < len(normalized_segments) and annotations:
+            remaining_segments = normalized_segments[segment_index:]
+            last_annotation = annotations[-1]
+            for segment in remaining_segments:
+                if segment["segment_id"] not in last_annotation["segment_ids"]:
+                    last_annotation["segment_ids"].append(segment["segment_id"])
+                    last_annotation["segment_types"].append(segment["type"])
+                    last_annotation["segment_sources"].append(segment["source"])
+
+        # 基于段落偏移补全块的字符范围
+        for annotation in annotations:
+            if not annotation["segment_ids"]:
+                annotation["char_start"] = None
+                annotation["char_end"] = None
+                continue
+
+            starts = [
+                segment_map[segment_id].get("char_start")
+                for segment_id in annotation["segment_ids"]
+                if segment_id in segment_map and segment_map[segment_id].get("char_start") is not None
+            ]
+            ends = [
+                segment_map[segment_id].get("char_end")
+                for segment_id in annotation["segment_ids"]
+                if segment_id in segment_map and segment_map[segment_id].get("char_end") is not None
+            ]
+
+            annotation["char_start"] = min(starts) if starts else None
+            annotation["char_end"] = max(ends) if ends else None
+
+        return annotations
+
+    def _build_segments_from_chunks(self, chunk_texts: List[str], source: str) -> List[Dict[str, Any]]:
+        """在缺乏 MinerU 解析时，以块为单位提供基本段落结构"""
+        segments: List[Dict[str, Any]] = []
+        for index, chunk_text in enumerate(chunk_texts):
+            text_value = chunk_text or ""
+            segments.append(
+                {
+                    "type": "text",
+                    "text": text_value,
+                    "source": source,
+                    "chunk_index": index,
+                }
+            )
+        return segments
 
 
 if __name__ == "__main__":

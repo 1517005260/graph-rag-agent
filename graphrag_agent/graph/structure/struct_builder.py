@@ -1,6 +1,6 @@
 import time
 import concurrent.futures
-from typing import List, Dict
+from typing import List, Dict, Optional, Any
 from langchain_core.documents import Document
 
 from graphrag_agent.graph.core import connection_manager, generate_hash
@@ -57,13 +57,21 @@ class GraphStructureBuilder:
         )
         return doc
         
-    def create_relation_between_chunks(self, file_name: str, chunks: List) -> List[Dict]:
+    def create_relation_between_chunks(
+        self,
+        file_name: str,
+        chunks: List,
+        chunk_annotations: Optional[List[Dict]] = None,
+        segments: Optional[List[Dict]] = None,
+    ) -> List[Dict]:
         """
         创建Chunk节点并建立关系 - 批处理优化版本
         
         Args:
             file_name: 文件名
             chunks: 文本块列表
+            chunk_annotations: 分块的多模态段落映射信息
+            segments: 文档的多模态段落列表
             
         Returns:
             List[Dict]: 带有ID和文档的块列表
@@ -76,6 +84,9 @@ class GraphStructureBuilder:
         relationships = []
         offset = 0
         
+        annotations = chunk_annotations or []
+        segments = segments or []
+
         # 处理每个chunk
         for i, chunk in enumerate(chunks):
             page_content = ''.join(chunk)
@@ -90,12 +101,28 @@ class GraphStructureBuilder:
             firstChunk = (i == 0)
             
             # 创建metadata和Document对象
+            annotation = annotations[i] if i < len(annotations) else {}
+            modal_segment_ids = annotation.get("segment_ids") or []
+            modal_segment_types = annotation.get("segment_types") or []
+            modal_segment_sources = annotation.get("segment_sources") or []
+            modal_char_start = annotation.get("char_start")
+            modal_char_end = annotation.get("char_end")
+
             metadata = {
                 "position": position,
                 "length": len(page_content),
                 "content_offset": offset,
                 "tokens": len(chunk)
             }
+            if modal_segment_ids:
+                metadata["modal_segment_ids"] = modal_segment_ids
+                metadata["modal_segment_types"] = modal_segment_types
+                metadata["modal_segment_sources"] = modal_segment_sources
+            if modal_char_start is not None:
+                metadata["modal_char_start"] = modal_char_start
+            if modal_char_end is not None:
+                metadata["modal_char_end"] = modal_char_end
+
             chunk_document = Document(page_content=page_content, metadata=metadata)
             
             # 准备batch数据
@@ -107,13 +134,19 @@ class GraphStructureBuilder:
                 "f_name": file_name,
                 "previous_id": previous_chunk_id,
                 "content_offset": offset,
-                "tokens": len(chunk)
+                "tokens": len(chunk),
+                "modal_segment_ids": modal_segment_ids,
+                "modal_segment_types": modal_segment_types,
+                "modal_segment_sources": modal_segment_sources,
+                "modal_char_start": modal_char_start,
+                "modal_char_end": modal_char_end,
             }
             batch_data.append(chunk_data)
             
             lst_chunks_including_hash.append({
                 'chunk_id': current_chunk_id,
-                'chunk_doc': chunk_document
+                'chunk_doc': chunk_document,
+                'modal_segment_ids': modal_segment_ids,
             })
             
             # 创建关系数据
@@ -136,6 +169,12 @@ class GraphStructureBuilder:
         if batch_data:
             self._process_batch(file_name, batch_data, relationships)
         
+        chunk_ids = [item['chunk_id'] for item in lst_chunks_including_hash]
+        if segments:
+            self._create_modal_segments(file_name, segments)
+        if segments and annotations:
+            self._link_chunks_to_segments(chunk_ids, annotations)
+
         t1 = time.time()
         print(f"创建关系耗时: {t1-t0:.2f}秒")
         
@@ -160,6 +199,101 @@ class GraphStructureBuilder:
         # 使用优化的数据库操作
         self._create_chunks_and_relationships_optimized(file_name, batch_data, first_relationships, next_relationships)
     
+    def _create_modal_segments(self, file_name: str, segments: List[Dict[str, Any]]) -> None:
+        """创建多模态段落节点并建立与文档的关系"""
+        if not segments:
+            return
+
+        payload: List[Dict[str, Any]] = []
+        for segment in segments:
+            segment_id = segment.get("segment_id")
+            if not segment_id:
+                continue
+            payload.append(
+                {
+                    "id": segment_id,
+                    "file_name": file_name,
+                    "text": segment.get("text") or "",
+                    "type": segment.get("type") or "text",
+                    "order": segment.get("segment_index"),
+                    "source": segment.get("source"),
+                    "page_idx": segment.get("page_idx"),
+                    "bbox": segment.get("bbox"),
+                    "char_start": segment.get("char_start"),
+                    "char_end": segment.get("char_end"),
+                    "image_rel_path": segment.get("image_relative_path"),
+                    "image_path": segment.get("image_path"),
+                    "table_html": segment.get("table_html"),
+                    "table_caption": segment.get("table_caption"),
+                    "table_footnote": segment.get("table_footnote") or [],
+                    "latex": segment.get("latex"),
+                    "image_caption": segment.get("image_caption") or [],
+                    "image_footnote": segment.get("image_footnote") or [],
+                }
+            )
+
+        if not payload:
+            return
+
+        query = """
+        UNWIND $segments AS data
+        MERGE (s:`__ModalSegment__` {id: data.id})
+        SET s.text = data.text,
+            s.modalType = data.type,
+            s.fileName = data.file_name,
+            s.order = data.order,
+            s.source = data.source,
+            s.pageIndex = data.page_idx,
+            s.bbox = data.bbox,
+            s.charStart = data.char_start,
+            s.charEnd = data.char_end,
+            s.imageRelativePath = data.image_rel_path,
+            s.imagePath = data.image_path,
+            s.tableHtml = data.table_html,
+            s.tableCaption = data.table_caption,
+            s.tableFootnote = data.table_footnote,
+            s.latex = data.latex,
+            s.imageCaption = data.image_caption,
+            s.imageFootnote = data.image_footnote
+        WITH s, data
+        MATCH (d:`__Document__` {fileName: data.file_name})
+        MERGE (d)-[:HAS_MODAL_SEGMENT]->(s)
+        """
+        self.graph.query(query, params={"segments": payload})
+
+    def _link_chunks_to_segments(self, chunk_ids: List[str], annotations: List[Dict[str, Any]]) -> None:
+        """建立Chunk与多模态段落之间的联系"""
+        if not chunk_ids or not annotations:
+            return
+
+        relations: List[Dict[str, Any]] = []
+        for index, chunk_id in enumerate(chunk_ids):
+            if index >= len(annotations):
+                break
+            segment_ids = annotations[index].get("segment_ids") or []
+            for order, segment_id in enumerate(segment_ids):
+                if not segment_id:
+                    continue
+                relations.append(
+                    {
+                        "chunk_id": chunk_id,
+                        "segment_id": segment_id,
+                        "order": order,
+                    }
+                )
+
+        if not relations:
+            return
+
+        query = """
+        UNWIND $relations AS rel
+        MATCH (c:`__Chunk__` {id: rel.chunk_id})
+        MATCH (s:`__ModalSegment__` {id: rel.segment_id})
+        MERGE (c)-[r:HAS_MODAL]->(s)
+        SET r.sequence = rel.order
+        """
+        self.graph.query(query, params={"relations": relations})
+    
     def _create_chunks_and_relationships_optimized(self, file_name: str, batch_data: List[Dict], 
                                                   first_relationships: List[Dict], next_relationships: List[Dict]):
         """
@@ -180,7 +314,12 @@ class GraphStructureBuilder:
             c.length = data.length, 
             c.fileName = data.f_name,
             c.content_offset = data.content_offset, 
-            c.tokens = data.tokens
+            c.tokens = data.tokens,
+            c.modal_segment_ids = CASE WHEN data.modal_segment_ids IS NULL THEN [] ELSE data.modal_segment_ids END,
+            c.modal_segment_types = CASE WHEN data.modal_segment_types IS NULL THEN [] ELSE data.modal_segment_types END,
+            c.modal_segment_sources = CASE WHEN data.modal_segment_sources IS NULL THEN [] ELSE data.modal_segment_sources END,
+            c.modal_char_start = data.modal_char_start,
+            c.modal_char_end = data.modal_char_end
         WITH c, data
         MATCH (d:`__Document__` {fileName: data.f_name})
         MERGE (c)-[:PART_OF]->(d)
@@ -210,23 +349,41 @@ class GraphStructureBuilder:
             """
             self.graph.query(query_next_chunk, params={"relationships": next_relationships})
     
-    def parallel_process_chunks(self, file_name: str, chunks: List, max_workers=None) -> List[Dict]:
+    def parallel_process_chunks(
+        self,
+        file_name: str,
+        chunks: List,
+        chunk_annotations: Optional[List[Dict]] = None,
+        segments: Optional[List[Dict]] = None,
+        max_workers=None,
+    ) -> List[Dict]:
         """
         并行处理chunks，提高大量数据的处理速度
         
         Args:
             file_name: 文件名
             chunks: 文本块列表
+            chunk_annotations: 分块的多模态段落映射信息
+            segments: 文档的多模态段落列表
             max_workers: 并行工作线程数
             
         Returns:
             List[Dict]: 带有ID和文档的块列表
         """
+        annotations = chunk_annotations or []
+        segments = segments or []
         max_workers = max_workers or DEFAULT_MAX_WORKERS
         
         if len(chunks) < 100:  # 对于小数据集，使用标准方法
-            return self.create_relation_between_chunks(file_name, chunks)
+            return self.create_relation_between_chunks(
+                file_name,
+                chunks,
+                chunk_annotations=annotations,
+                segments=segments,
+            )
         
+        ordered_chunk_ids = [generate_hash(''.join(chunk)) for chunk in chunks]
+
         # 将chunks分为多个批次
         chunk_batches = []
         batch_size = max(10, len(chunks) // max_workers)
@@ -267,6 +424,13 @@ class GraphStructureBuilder:
                     
                 firstChunk = (abs_index == 0)
                 
+                annotation = annotations[abs_index] if abs_index < len(annotations) else {}
+                modal_segment_ids = annotation.get("segment_ids") or []
+                modal_segment_types = annotation.get("segment_types") or []
+                modal_segment_sources = annotation.get("segment_sources") or []
+                modal_char_start = annotation.get("char_start")
+                modal_char_end = annotation.get("char_end")
+
                 # 创建metadata和Document对象
                 metadata = {
                     "position": position,
@@ -274,6 +438,15 @@ class GraphStructureBuilder:
                     "content_offset": offset,
                     "tokens": len(chunk)
                 }
+                if modal_segment_ids:
+                    metadata["modal_segment_ids"] = modal_segment_ids
+                    metadata["modal_segment_types"] = modal_segment_types
+                    metadata["modal_segment_sources"] = modal_segment_sources
+                if modal_char_start is not None:
+                    metadata["modal_char_start"] = modal_char_start
+                if modal_char_end is not None:
+                    metadata["modal_char_end"] = modal_char_end
+
                 chunk_document = Document(page_content=page_content, metadata=metadata)
                 
                 # 准备batch数据
@@ -285,13 +458,19 @@ class GraphStructureBuilder:
                     "f_name": file_name,
                     "previous_id": previous_chunk_id,
                     "content_offset": offset,
-                    "tokens": len(chunk)
+                    "tokens": len(chunk),
+                    "modal_segment_ids": modal_segment_ids,
+                    "modal_segment_types": modal_segment_types,
+                    "modal_segment_sources": modal_segment_sources,
+                    "modal_char_start": modal_char_start,
+                    "modal_char_end": modal_char_end,
                 }
                 batch_data.append(chunk_data)
                 
                 results.append({
                     'chunk_id': current_chunk_id,
-                    'chunk_doc': chunk_document
+                    'chunk_doc': chunk_document,
+                    'modal_segment_ids': modal_segment_ids,
                 })
                 
                 # 创建关系数据
@@ -348,6 +527,11 @@ class GraphStructureBuilder:
         
         end_time = time.time()
         print(f"写入数据库完成，耗时: {end_time - start_time:.2f}秒")
+
+        if segments:
+            self._create_modal_segments(file_name, segments)
+        if segments and annotations:
+            self._link_chunks_to_segments(ordered_chunk_ids, annotations)
         
         return all_results
     
@@ -369,7 +553,12 @@ class GraphStructureBuilder:
                 c.length = data.length, 
                 c.fileName = data.f_name,
                 c.content_offset = data.content_offset, 
-                c.tokens = data.tokens
+                c.tokens = data.tokens,
+                c.modal_segment_ids = CASE WHEN data.modal_segment_ids IS NULL THEN [] ELSE data.modal_segment_ids END,
+                c.modal_segment_types = CASE WHEN data.modal_segment_types IS NULL THEN [] ELSE data.modal_segment_types END,
+                c.modal_segment_sources = CASE WHEN data.modal_segment_sources IS NULL THEN [] ELSE data.modal_segment_sources END,
+                c.modal_char_start = data.modal_char_start,
+                c.modal_char_end = data.modal_char_end
             WITH data, c
             MATCH (d:`__Document__` {fileName: data.f_name})
             MERGE (c)-[:PART_OF]->(d)

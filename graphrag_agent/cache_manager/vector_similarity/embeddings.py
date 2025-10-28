@@ -1,9 +1,18 @@
 import numpy as np
+import warnings
 from abc import ABC, abstractmethod
-from typing import List, Union
-from sentence_transformers import SentenceTransformer
+from typing import List, Union, Optional
 import threading
 from pathlib import Path
+
+try:  # 允许在缺失 sentence_transformers/torch 时降级
+    from sentence_transformers import SentenceTransformer  # type: ignore
+    _SENTENCE_TRANSFORMERS_AVAILABLE = True
+    _SENTENCE_TRANSFORMERS_IMPORT_ERROR: Optional[Exception] = None
+except Exception as exc:  # 捕获 ImportError 及其依赖错误
+    SentenceTransformer = None  # type: ignore
+    _SENTENCE_TRANSFORMERS_AVAILABLE = False
+    _SENTENCE_TRANSFORMERS_IMPORT_ERROR = exc
 
 from graphrag_agent.config.settings import (
     MODEL_CACHE_DIR,
@@ -97,6 +106,13 @@ class SentenceTransformerEmbedding(EmbeddingProvider):
 
         self.model_name = model_name
 
+        if not _SENTENCE_TRANSFORMERS_AVAILABLE or SentenceTransformer is None:
+            raise ImportError(
+                "需要安装 sentence-transformers/torch 才能使用 SentenceTransformerEmbedding。"
+                " 可执行 `pip install sentence-transformers torch`，"
+                " 或在环境变量/配置中将 CACHE_EMBEDDING_PROVIDER 设置为 'openai'。"
+            ) from _SENTENCE_TRANSFORMERS_IMPORT_ERROR
+
         # 设置模型缓存目录
         if cache_dir is None:
             cache_dir = MODEL_CACHE_DIR
@@ -134,6 +150,13 @@ def get_cache_embedding_provider() -> EmbeddingProvider:
     if provider_type == 'openai':
         return OpenAIEmbeddingProvider()
     else:
+        if not _SENTENCE_TRANSFORMERS_AVAILABLE or SentenceTransformer is None:
+            warnings.warn(
+                "未检测到 sentence-transformers/torch，自动回退到 OpenAI embedding。"
+                " 若需使用本地 SentenceTransformer，请安装依赖或在配置中显式设置。",
+                RuntimeWarning,
+            )
+            return OpenAIEmbeddingProvider()
         # 使用sentence transformer
         model_name = CACHE_SENTENCE_TRANSFORMER_MODEL
         return SentenceTransformerEmbedding(model_name=model_name, cache_dir=MODEL_CACHE_DIR)

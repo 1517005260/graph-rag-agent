@@ -212,13 +212,17 @@ class KnowledgeGraphBuilder:
                             result = self.struct_builder.parallel_process_chunks(
                                 doc["filename"],
                                 chunks,
+                                chunk_annotations=doc.get("chunk_annotations"),
+                                segments=doc.get("modal_segments"),
                                 max_workers=os.cpu_count() or 4
                             )
                         else:
                             # 对于小文件使用标准批处理
                             result = self.struct_builder.create_relation_between_chunks(
                                 doc["filename"],
-                                chunks
+                                chunks,
+                                chunk_annotations=doc.get("chunk_annotations"),
+                                segments=doc.get("modal_segments"),
                             )
                         doc["graph_result"] = result
                 progress.advance(task)

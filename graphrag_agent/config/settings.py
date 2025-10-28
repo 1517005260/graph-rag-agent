@@ -7,6 +7,9 @@ from dotenv import load_dotenv
 # 统一加载环境变量，确保配置来源一致
 load_dotenv()
 
+# MinerU 默认使用 ModelScope 模型源，除非用户显式指定
+os.environ.setdefault("MINERU_MODEL_SOURCE", "modelscope")
+
 
 def _get_env_int(key: str, default: Optional[int]) -> Optional[int]:
     """获取整型环境变量，未设置时返回默认值"""
@@ -225,7 +228,7 @@ SENTENCE_TRANSFORMER_MODELS = [
     if item.strip()
 ]  # 预加载的本地模型列表
 CACHE_EMBEDDING_PROVIDER = os.getenv(
-    "CACHE_EMBEDDING_PROVIDER", "sentence_transformer"
+    "CACHE_EMBEDDING_PROVIDER", "openai"
 ).lower()
 CACHE_SENTENCE_TRANSFORMER_MODEL = os.getenv(
     "CACHE_SENTENCE_TRANSFORMER_MODEL", "all-MiniLM-L6-v2"
