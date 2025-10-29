@@ -10,6 +10,7 @@ from graphrag_agent.config.settings import (
     TIKTOKEN_CACHE_DIR,
     OPENAI_EMBEDDING_CONFIG,
     OPENAI_LLM_CONFIG,
+    OPENAI_VISION_CONFIG,
 )
 
 
@@ -38,6 +39,25 @@ def get_stream_llm_model():
     config = {k: v for k, v in OPENAI_LLM_CONFIG.items() if v is not None and v != ""}
     config.update({"streaming": True, "callbacks": manager})
     return ChatOpenAI(**config)
+
+
+def get_vision_model():
+    """
+    获取 OpenAI 视觉模型客户端及默认模型名称。
+
+    Returns:
+        tuple: (OpenAI 客户端实例, 模型名称)
+    """
+    from openai import OpenAI
+
+    client_kwargs = {
+        key: value for key, value in OPENAI_VISION_CONFIG.items()
+        if key in {"api_key", "base_url"} and value
+    }
+    client = OpenAI(**client_kwargs)
+
+    model_name = OPENAI_VISION_CONFIG.get("model")
+    return client, model_name
 
 def count_tokens(text):
     """简单通用的token计数"""

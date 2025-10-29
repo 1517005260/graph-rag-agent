@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from dotenv import load_dotenv
 
@@ -52,6 +52,31 @@ def _get_env_choice(key: str, choices: set[str], default: str) -> str:
             f"环境变量 {key} 必须为 {', '.join(sorted(choices))} 之一，但当前为 {raw}"
         )
     return value
+
+
+def _get_env_int_pair(key: str, default: Tuple[int, int]) -> Tuple[int, int]:
+    """获取由两个整数构成的配置，使用逗号分隔"""
+    raw = os.getenv(key)
+    if raw is None or raw.strip() == "":
+        return default
+
+    parts = [item.strip() for item in raw.split(",") if item.strip()]
+    if len(parts) != 2:
+        raise ValueError(
+            f"环境变量 {key} 需要形如 'width,height' 的两个整数，但当前为 {raw}"
+        )
+
+    try:
+        width, height = int(parts[0]), int(parts[1])
+    except ValueError as exc:
+        raise ValueError(
+            f"环境变量 {key} 需要形如 'width,height' 的两个整数，但当前为 {raw}"
+        ) from exc
+
+    if width <= 0 or height <= 0:
+        raise ValueError(f"环境变量 {key} 中的宽高必须为正整数，但当前为 {raw}")
+
+    return width, height
 
 
 def _resolve_project_path(raw_value: Optional[str], default: str) -> Path:
@@ -119,7 +144,7 @@ MINERU_DUMP_MIDDLE_JSON = _get_env_bool("MINERU_DUMP_MIDDLE_JSON", False)
 MINERU_DUMP_MODEL_OUTPUT = _get_env_bool("MINERU_DUMP_MODEL_OUTPUT", False)
 
 MINERU_DEVICE_MODE = os.getenv("MINERU_DEVICE_MODE", "auto")
-MINERU_OUTPUT_RETENTION_HOURS = _get_env_int("MINERU_OUTPUT_RETENTION_HOURS", 24) or 24
+MINERU_OUTPUT_RETENTION_HOURS = _get_env_int("MINERU_OUTPUT_RETENTION_HOURS", 2400) or 2400
 
 # ===== 知识库与系统参数 =====
 
@@ -297,6 +322,29 @@ OPENAI_LLM_CONFIG = {
     "max_tokens": LLM_MAX_TOKENS,
     "api_key": OPENAI_API_KEY,
     "base_url": OPENAI_BASE_URL,
+}
+
+OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")
+OPENAI_VISION_CONFIG = {
+    "model": OPENAI_VISION_MODEL,
+    "api_key": OPENAI_API_KEY,
+    "base_url": OPENAI_BASE_URL,
+}
+
+VISION_MAX_IMAGE_COUNT = _get_env_int("VISION_MAX_IMAGE_COUNT", 3) or 3
+VISION_IMAGE_MAX_SIZE = _get_env_int_pair("VISION_IMAGE_MAX_SIZE", (1024, 1024))
+VISION_IMAGE_QUALITY = _get_env_int("VISION_IMAGE_QUALITY", 85) or 85
+VISION_IMAGE_DETAIL = _get_env_choice(
+    "VISION_IMAGE_DETAIL",
+    {"low", "high", "auto"},
+    "high",
+)
+
+VISION_IMAGE_SETTINGS = {
+    "max_count": VISION_MAX_IMAGE_COUNT,
+    "max_size": VISION_IMAGE_MAX_SIZE,
+    "quality": VISION_IMAGE_QUALITY,
+    "detail": VISION_IMAGE_DETAIL,
 }
 
 # ===== 相似实体检测参数 =====
