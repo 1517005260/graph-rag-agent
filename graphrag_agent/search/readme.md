@@ -43,6 +43,18 @@ graphrag_agent/search/
 
 ## 实现思路
 
+### 多模态检索增强
+
+- `LocalSearch` 在加载向量检索结果时会自动查询 `__ModalSegment__`，为每个文本块补充表格、公式、图片等多模态片段，并将图片的下载 `URL`（基于 `MINERU_ASSET_BASE_URL`）写入文档元数据。
+- `ModalEnricher` 作为公共模块复用在 `LocalSearch`、`HybridSearchTool`、`NaiveSearchTool` 等检索器中，统一负责批量查询 `__ModalSegment__`、构建图片 URL 与聚合多模态摘要，避免重复实现。
+- 文档节点会同步写入 `mineruTaskId` 与 MinerU 输出目录，确保 `ModalEnricher` 在 Neo4j 查询阶段可以稳定构建图片直链，避免未知属性造成的警告。
+- `LocalSearchTool.structured_search` 返回值新增 `modal_segments`、`modal_asset_urls` 和 `modal_context` 字段，`HybridSearchTool` 与 `NaiveSearchTool` 也会在结构化结果或引用信息中附带同样的多模态元数据，便于前后端直接渲染 MinerU 的解析成果。
+- `NaiveSearchTool` 支持通过 `NAIVE_SEARCH_CANDIDATE_LIMIT` 控制候选块规模（默认 2000），保障像 “二维码” 这类主要依赖图片的查询仍能命中正确的多模态证据。
+- `search/retrieval_adapter.py` 会将多模态结构写入 `RetrievalResult.metadata.extra`，下游多 Agent 与前端可直接消费，回答时可以引用表格/公式内容，图片仅返回 URL 交由前端展示。
+- `GlobalSearchTool` 与 `ChainOfExplorationTool` 在社区 Map 阶段与图谱探索过程中同样注入 `modal_context`，并随结构化输出返回图片 URL、表格/公式片段，实现跨社区与图探索场景的多模态联动。
+- 如需自定义图片访问地址，可在 `.env` 中设置 `MINERU_ASSET_BASE_URL`，默认指向 MinerU 服务的 `/download` 接口。
+- 多模态检索路由与轻量重排的思路参考自 `LightRAG` 中的 Mix 策略：优先保留文本召回结果，再通过 `ModalEnricher` 拼接图片、表格、公式等证据。
+
 该搜索模块采用分层架构，通过组合不同级别的搜索策略来满足不同场景的需求：
 
 1. **基础搜索层**：

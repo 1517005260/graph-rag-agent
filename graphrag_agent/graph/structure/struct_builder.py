@@ -33,7 +33,14 @@ class GraphStructureBuilder:
             """
         self.graph.query(clear_query)
         
-    def create_document(self, type: str, uri: str, file_name: str, domain: str) -> Dict:
+    def create_document(
+        self,
+        type: str,
+        uri: str,
+        file_name: str,
+        domain: str,
+        extra_properties: Optional[Dict[str, Any]] = None,
+    ) -> Dict:
         """
         创建Document节点
         
@@ -46,15 +53,33 @@ class GraphStructureBuilder:
         Returns:
             Dict: 创建的文档节点信息
         """
-        query = """
-        MERGE(d:`__Document__` {fileName: $file_name}) 
-        SET d.type=$type, d.uri=$uri, d.domain=$domain
-        RETURN d;
+        set_fragments = [
+            "d.type = $type",
+            "d.uri = $uri",
+            "d.domain = $domain",
+        ]
+        params: Dict[str, Any] = {
+            "file_name": file_name,
+            "type": type,
+            "uri": uri,
+            "domain": domain,
+        }
+
+        if extra_properties:
+            for key, value in extra_properties.items():
+                if value is None:
+                    continue
+                param_key = f"extra_{key}"
+                params[param_key] = value
+                set_fragments.append(f"d.{key} = ${param_key}")
+
+        set_clause = ", ".join(set_fragments)
+        query = f"""
+        MERGE (d:`__Document__` {{fileName: $file_name}})
+        SET {set_clause}
+        RETURN d
         """
-        doc = self.graph.query(
-            query,
-            {"file_name": file_name, "type": type, "uri": uri, "domain": domain}
-        )
+        doc = self.graph.query(query, params)
         return doc
         
     def create_relation_between_chunks(

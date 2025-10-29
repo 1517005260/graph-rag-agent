@@ -1,13 +1,19 @@
 from typing import List, Dict, Any
 import time
 import numpy as np
+import json
 
 from langchain_core.tools import BaseTool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 from graphrag_agent.config.prompts import NAIVE_PROMPT, NAIVE_SEARCH_QUERY_PROMPT
-from graphrag_agent.config.settings import response_type, naive_description, NAIVE_SEARCH_TOP_K
+from graphrag_agent.config.settings import (
+    response_type,
+    naive_description,
+    NAIVE_SEARCH_TOP_K,
+    NAIVE_SEARCH_CANDIDATE_LIMIT,
+)
 from graphrag_agent.search.tool.base import BaseSearchTool
 from graphrag_agent.search.utils import VectorUtils
 
@@ -22,6 +28,7 @@ class NaiveSearchTool(BaseSearchTool):
         
         # 搜索参数设置
         self.top_k = NAIVE_SEARCH_TOP_K  # 检索的最大文档数量
+        self.candidate_limit = NAIVE_SEARCH_CANDIDATE_LIMIT  # 参与相似度计算的候选上限
         
         # 设置处理链
         self._setup_chains()
@@ -108,12 +115,19 @@ class NaiveSearchTool(BaseSearchTool):
             query_embedding = self.embeddings.embed_query(query)
             
             # 获取带embedding的Chunk节点
-            chunks_with_embedding = self.graph.query("""
+            candidate_query = """
             MATCH (c:__Chunk__)
             WHERE c.embedding IS NOT NULL
             RETURN c.id AS id, c.text AS text, c.embedding AS embedding
-            LIMIT 100  // 获取候选集
-            """)
+            """
+            query_params: Dict[str, Any] = {}
+            if self.candidate_limit:
+                candidate_query += "\n            LIMIT $candidate_limit"
+                query_params["candidate_limit"] = int(self.candidate_limit)
+            if query_params:
+                chunks_with_embedding = self.graph.query(candidate_query, query_params)
+            else:
+                chunks_with_embedding = self.graph.query(candidate_query)
             
             # 使用工具类对候选集进行排序
             scored_chunks = VectorUtils.rank_by_similarity(
@@ -125,6 +139,9 @@ class NaiveSearchTool(BaseSearchTool):
             
             # 取top_k个结果
             results = scored_chunks[:self.top_k]
+            chunk_ids = [item.get("id") for item in results if item.get("id")]
+            modal_map = self.modal_enricher.fetch_modal_map(chunk_ids)
+            modal_summary = self.modal_enricher.aggregate_modal_summary(modal_map=modal_map)
             
             search_time = time.time() - search_start
             self.performance_metrics["query_time"] = search_time
@@ -134,15 +151,20 @@ class NaiveSearchTool(BaseSearchTool):
             
             # 格式化检索到的文档片段
             chunks_content = []
-            chunk_ids = []
-            
             for item in results:
                 chunk_id = item.get("id", "unknown")
                 text = item.get("text", "")
-                
+                modal_data = modal_map.get(item.get("id")) if item.get("id") else {}
+                chunk_lines = []
+                if chunk_id:
+                    chunk_lines.append(f"Chunk ID: {chunk_id}")
                 if text:
-                    chunks_content.append(f"Chunk ID: {chunk_id}\n{text}")
-                    chunk_ids.append(chunk_id)
+                    chunk_lines.append(text)
+                modal_context = modal_data.get("modal_context") if modal_data else ""
+                if modal_context:
+                    chunk_lines.append(f"多模态补充:\n{modal_context}")
+                if chunk_lines:
+                    chunks_content.append("\n".join(chunk_lines))
             
             context = "\n\n---\n\n".join(chunks_content)
             
@@ -158,11 +180,15 @@ class NaiveSearchTool(BaseSearchTool):
             llm_time = time.time() - llm_start
             self.performance_metrics["llm_time"] = llm_time
             
-            # 确保回答中包含Chunk ID
-            if "{'data': {'Chunks':" not in answer:
-                # 添加引用信息
-                chunk_references = ", ".join([f"'{id}'" for id in chunk_ids[:5]])
-                answer += f"\n\n{{'data': {{'Chunks':[{chunk_references}] }} }}"
+            # 附带引用信息与多模态素材
+            reference_payload = {
+                "data": {
+                    "Chunks": list(dict.fromkeys(chunk_ids))[:5],
+                    "modalAssets": modal_summary.asset_urls,
+                    "modalContexts": modal_summary.contexts,
+                }
+            }
+            answer += f"\n\n{json.dumps(reference_payload, ensure_ascii=False)}"
             
             # 缓存结果
             self.cache_manager.set(cache_key, answer)

@@ -229,7 +229,9 @@ class HybridSearchTool(BaseSearchTool):
             print(f"文本搜索也失败: {e}")
             return []
     
-    def _retrieve_low_level_content(self, query: str, keywords: List[str]) -> Tuple[str, List[RetrievalResult]]:
+    def _retrieve_low_level_content(
+        self, query: str, keywords: List[str]
+    ) -> Tuple[str, List[RetrievalResult], Dict[str, Dict[str, Any]]]:
         """
         检索低级内容（具体实体和关系）
         
@@ -238,10 +240,11 @@ class HybridSearchTool(BaseSearchTool):
             keywords: 低级关键词列表
             
         返回:
-            Tuple[str, List[RetrievalResult]]: 格式化内容及对应证据
+            Tuple[str, List[RetrievalResult], Dict[str, Dict[str, Any]]]: 格式化内容、证据以及多模态映射
         """
         query_start = time.time()
         retrieval_results: List[RetrievalResult] = []
+        modal_map: Dict[str, Dict[str, Any]] = {}
         
         # 首先使用关键词查询获取相关实体
         entity_ids = []
@@ -292,7 +295,7 @@ class HybridSearchTool(BaseSearchTool):
         # 如果仍然没有实体，返回空内容
         if not entity_ids:
             self.performance_metrics["query_time"] += time.time() - query_start
-            return "没有找到相关的低级内容。", retrieval_results
+            return "没有找到相关的低级内容。", retrieval_results, modal_map
         
         # 获取实体信息 - 不使用多跳关系以避免复杂查询
         entity_query = """
@@ -352,6 +355,7 @@ class HybridSearchTool(BaseSearchTool):
             
             # 构建结果
             low_level = []
+            chunk_list: List[Dict[str, Any]] = []
             
             # 添加实体信息
             if not entity_results.empty and 'entities' in entity_results.columns:
@@ -409,10 +413,23 @@ class HybridSearchTool(BaseSearchTool):
             if not chunk_results.empty and 'chunks' in chunk_results.columns:
                 chunks = chunk_results.iloc[0]['chunks']
                 if chunks:
+                    chunk_list = chunks
+                    chunk_ids = [chunk.get("id") for chunk in chunks if chunk.get("id")]
+                    if chunk_ids:
+                        modal_map = self.modal_enricher.fetch_modal_map(chunk_ids)
                     low_level.append("\n### 相关文本")
                     for chunk in chunks:
                         chunk_text = f"- ID: {chunk['id']}\n  内容: {chunk['text']}"
+                        modal_data = modal_map.get(chunk.get("id")) if chunk.get("id") else {}
+                        modal_context = modal_data.get("modal_context") if modal_data else ""
+                        if modal_context:
+                            chunk_text += f"\n  多模态补充:\n{modal_context}"
                         low_level.append(chunk_text)
+                        extra_payload = {"raw_chunk": chunk}
+                        if modal_data:
+                            extra_payload["modal_segments"] = modal_data.get("modal_segments") or []
+                            extra_payload["modal_asset_urls"] = modal_data.get("modal_asset_urls") or []
+                            extra_payload["modal_context"] = modal_context or ""
                         retrieval_results.append(
                             create_retrieval_result(
                                 evidence=chunk.get("text", ""),
@@ -422,20 +439,20 @@ class HybridSearchTool(BaseSearchTool):
                                     source_id=str(chunk.get("id")),
                                     source_type="chunk",
                                     confidence=0.7,
-                                    extra={"raw_chunk": chunk},
+                                    extra=extra_payload,
                                 ),
                                 score=0.7,
                             )
                         )
             
             if not low_level:
-                return "没有找到相关的低级内容。", retrieval_results
+                return "没有找到相关的低级内容。", retrieval_results, modal_map
                 
-            return "\n".join(low_level), retrieval_results
+            return "\n".join(low_level), retrieval_results, modal_map
         except Exception as e:
             self.performance_metrics["query_time"] += time.time() - query_start
             print(f"实体查询失败: {e}")
-            return "查询实体信息时出错。", retrieval_results
+            return "查询实体信息时出错。", retrieval_results, modal_map
     
     def _retrieve_high_level_content(self, query: str, keywords: List[str]) -> Tuple[str, List[RetrievalResult]]:
         """
@@ -553,7 +570,7 @@ class HybridSearchTool(BaseSearchTool):
         
         try:
             # 1. 检索低级内容（实体和关系）
-            low_level_content, low_evidence = self._retrieve_low_level_content(query, low_keywords)
+            low_level_content, low_evidence, low_modal_map = self._retrieve_low_level_content(query, low_keywords)
             
             # 2. 检索高级内容（社区和主题）
             high_level_content, high_evidence = self._retrieve_high_level_content(query, high_keywords)
@@ -572,12 +589,16 @@ class HybridSearchTool(BaseSearchTool):
             self.performance_metrics["llm_time"] += time.time() - llm_start
             
             all_evidence = merge_retrieval_results(low_evidence, high_evidence)
+            modal_summary = self.modal_enricher.aggregate_modal_summary(modal_map=low_modal_map)
             structured_result = {
                 "query": query,
                 "low_level_content": low_level_content,
                 "high_level_content": high_level_content,
                 "final_answer": answer if answer else "未找到相关信息",
                 "retrieval_results": results_to_payload(all_evidence),
+                "modal_segments": modal_summary.segments,
+                "modal_asset_urls": modal_summary.asset_urls,
+                "modal_context": "\n\n".join(modal_summary.contexts),
             }
             
             # 缓存结果

@@ -1,12 +1,44 @@
-from typing import Dict, Any
+from typing import Any, Dict, List, Optional, Sequence
 import pandas as pd
 from neo4j import Result
 from langchain_community.vectorstores import Neo4jVector
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.documents import Document
+from langchain_core.retrievers import BaseRetriever
 from graphrag_agent.config.prompts import LC_SYSTEM_PROMPT, LOCAL_SEARCH_CONTEXT_PROMPT
 from graphrag_agent.config.neo4jdb import get_db_manager
 from graphrag_agent.config.settings import LOCAL_SEARCH_SETTINGS
+from graphrag_agent.search.modal_enricher import ModalEnricher, ModalSummary
+
+
+class _ModalAwareRetriever(BaseRetriever):
+    """包装向量检索器，在返回结果前补充多模态信息。"""
+
+    def __init__(self, backend: BaseRetriever, enrich_fn):
+        super().__init__()
+        self._backend = backend
+        self._enrich_fn = enrich_fn
+
+    def _get_relevant_documents(
+        self,
+        query: str,
+        *,
+        run_manager=None,
+    ) -> List[Document]:
+        docs = self._backend.get_relevant_documents(query)
+        return self._enrich_fn(docs)
+
+    async def _aget_relevant_documents(
+        self,
+        query: str,
+        *,
+        run_manager=None,
+    ) -> List[Document]:
+        if hasattr(self._backend, "aget_relevant_documents"):
+            docs = await self._backend.aget_relevant_documents(query)
+            return self._enrich_fn(docs)
+        return self._get_relevant_documents(query, run_manager=run_manager)
 
 class LocalSearch:
     """
@@ -48,6 +80,7 @@ class LocalSearch:
         ]
         self.top_entities = LOCAL_SEARCH_SETTINGS["top_entities"]
         self.index_name = LOCAL_SEARCH_SETTINGS["index_name"]
+        self.modal_enricher = ModalEnricher(self.driver)
         
         # 初始化社区节点权重
         self._init_community_weights()
@@ -80,6 +113,21 @@ class LocalSearch:
             cypher,
             parameters_=params,
             result_transformer_=Result.to_df
+        )
+    
+    def enrich_documents(self, documents: Sequence[Document]) -> List[Document]:
+        """为检索到的文档补充多模态段落及辅助信息。"""
+        return self.modal_enricher.enrich_documents(documents)
+
+    def aggregate_modal_summary(
+        self,
+        documents: Optional[Sequence[Document]] = None,
+        modal_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> ModalSummary:
+        """聚合多模态段落，返回统一结构。"""
+        return self.modal_enricher.aggregate_modal_summary(
+            documents=documents,
+            modal_map=modal_map,
         )
         
     @property
@@ -162,10 +210,11 @@ class LocalSearch:
             retrieval_query=final_query
         )
         
-        # 返回检索器
-        return vector_store.as_retriever(
+        # 返回带多模态增强的检索器
+        backend_retriever = vector_store.as_retriever(
             search_kwargs={"k": self.top_entities}
         )
+        return _ModalAwareRetriever(backend_retriever, self.enrich_documents)
         
     def search(self, query: str) -> str:
         """
@@ -207,10 +256,15 @@ class LocalSearch:
                 "topInsideRels": self.top_inside_rels,
             }
         )
+        docs = self.enrich_documents(docs)
         
         # 使用LLM生成响应
+        combined_context = "\n\n".join(
+            [getattr(doc, "page_content", "") for doc in docs]
+        ) if docs else ""
+
         response = chain.invoke({
-            "context": docs[0].page_content if docs else "",
+            "context": combined_context,
             "input": query,
             "response_type": self.response_type
         })

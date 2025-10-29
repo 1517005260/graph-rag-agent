@@ -5,6 +5,7 @@ from typing import List, Dict, Any
 from langchain_core.tools import BaseTool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from neo4j import Result
 
 from graphrag_agent.config.prompts import (
     MAP_SYSTEM_PROMPT,
@@ -15,6 +16,7 @@ from graphrag_agent.config.prompts import (
 )
 from graphrag_agent.config.settings import gl_description, GLOBAL_SEARCH_SETTINGS
 from graphrag_agent.search.tool.base import BaseSearchTool
+from graphrag_agent.search.modal_enricher import ModalSummary
 from graphrag_agent.search.retrieval_adapter import (
     create_retrieval_metadata,
     create_retrieval_result,
@@ -39,6 +41,7 @@ class GlobalSearchTool(BaseSearchTool):
         
         # 调用父类构造函数
         super().__init__(cache_dir="./cache/global_search")
+        self.community_chunk_limit = GLOBAL_SEARCH_SETTINGS.get("community_chunk_limit", 5)
 
         # 设置处理链
         self._setup_chains()
@@ -159,6 +162,102 @@ class GlobalSearchTool(BaseSearchTool):
         # 执行查询
         return self.graph.query(cypher_query, params=params)
     
+    def _attach_modal_to_communities(self, communities: List[dict]):
+        """为社区数据补充多模态段落，并返回聚合摘要。"""
+        community_ids: List[str] = []
+        for item in communities:
+            info = item.get("output", item)
+            community_id = info.get("communityId") or info.get("id")
+            if community_id:
+                community_ids.append(str(community_id))
+
+        if not community_ids:
+            for item in communities:
+                info = item.get("output", item)
+                if info:
+                    base_text = info.get("full_content") or info.get("summary") or ""
+                    info.setdefault("modal_segments", [])
+                    info.setdefault("modal_asset_urls", [])
+                    info.setdefault("modal_context", "")
+                    info.setdefault("context_for_llm", base_text)
+            return self.modal_enricher.aggregate_modal_summary(modal_map={})
+
+        query = """
+        MATCH (c:__Community__)
+        WHERE c.id IN $community_ids
+        MATCH (c)<-[:IN_COMMUNITY]-(e:__Entity__)
+        MATCH (chunk:__Chunk__)-[:MENTIONS]->(e)
+        WITH c, chunk
+        ORDER BY chunk.position ASC, chunk.id ASC
+        WITH c, collect(DISTINCT chunk.id)[0..$limit] AS chunk_ids
+        RETURN c.id AS community_id, chunk_ids
+        """
+
+        result_df = self.driver.execute_query(
+            query,
+            parameters_={
+                "community_ids": community_ids,
+                "limit": self.community_chunk_limit,
+            },
+            result_transformer_=Result.to_df,
+        )
+
+        aggregated_modal_map: Dict[str, Dict[str, Any]] = {}
+        community_modal_map: Dict[str, Dict[str, Any]] = {}
+
+        if isinstance(result_df, list):
+            iterable = result_df
+        elif result_df is None:
+            iterable = []
+        elif hasattr(result_df, "to_dict"):
+            iterable = result_df.to_dict("records")
+        else:
+            iterable = []
+
+        for row in iterable:
+            community_id = str(row.get("community_id") or "")
+            chunk_ids = row.get("chunk_ids") or []
+            if not community_id:
+                continue
+            modal_map = self.modal_enricher.fetch_modal_map(chunk_ids)
+            aggregated_modal_map.update(modal_map)
+            summary = self.modal_enricher.aggregate_modal_summary(modal_map=modal_map)
+            community_modal_map[community_id] = {
+                "summary": summary,
+                "chunk_ids": chunk_ids,
+            }
+
+        for item in communities:
+            info = item.get("output", item)
+            if not info:
+                continue
+            community_id = str(info.get("communityId") or info.get("id") or "")
+            base_text = info.get("full_content") or info.get("summary") or ""
+            modal_entry = community_modal_map.get(community_id)
+            if modal_entry:
+                summary = modal_entry["summary"]
+                modal_context = "\n\n".join(summary.contexts)
+                info["modal_segments"] = summary.segments
+                info["modal_asset_urls"] = summary.asset_urls
+                info["modal_context"] = modal_context
+                info["modal_chunk_ids"] = modal_entry.get("chunk_ids", [])
+                if modal_context:
+                    info["context_for_llm"] = (
+                        f"{base_text}\n\n[多模态补充]\n{modal_context}"
+                        if base_text
+                        else f"[多模态补充]\n{modal_context}"
+                    )
+                else:
+                    info["context_for_llm"] = base_text
+            else:
+                info.setdefault("modal_segments", [])
+                info.setdefault("modal_asset_urls", [])
+                info.setdefault("modal_context", "")
+                info.setdefault("modal_chunk_ids", [])
+                info["context_for_llm"] = base_text
+
+        return self.modal_enricher.aggregate_modal_summary(modal_map=aggregated_modal_map)
+    
     def _process_community_batch(self, query: str, batch: List[dict]) -> str:
         """
         处理社区批次，提高效率
@@ -173,7 +272,10 @@ class GlobalSearchTool(BaseSearchTool):
         # 合并批次内的社区数据
         combined_data = []
         for item in batch:
-            combined_data.append(f"社区ID: {item['output']['communityId']}\n内容: {item['output']['full_content']}")
+            info = item.get("output", item)
+            community_id = info.get("communityId") or info.get("id") or "unknown"
+            context_text = info.get("context_for_llm") or info.get("full_content") or ""
+            combined_data.append(f"社区ID: {community_id}\n内容: {context_text}")
         
         batch_context = "\n---\n".join(combined_data)
         
@@ -255,7 +357,12 @@ class GlobalSearchTool(BaseSearchTool):
                 source_type="community",
                 confidence=info.get("confidence", 0.6),
                 community_id=community_id,
-                extra={"raw": info},
+                extra={
+                    "raw": info,
+                    "modal_segments": info.get("modal_segments"),
+                    "modal_asset_urls": info.get("modal_asset_urls"),
+                    "modal_context": info.get("modal_context"),
+                },
             )
             result = create_retrieval_result(
                 evidence=summary,
@@ -300,11 +407,19 @@ class GlobalSearchTool(BaseSearchTool):
                     "intermediate_results": [],
                     "final_answer": "",
                     "retrieval_results": [],
+                    "communities": [],
+                    "modal_segments": [],
+                    "modal_asset_urls": [],
+                    "modal_context": "",
                 }
 
+            overall_modal_summary: ModalSummary = self._attach_modal_to_communities(community_data)
             intermediate_results = self._process_communities(query, community_data)
             final_answer = self._reduce_results(query, intermediate_results) if intermediate_results else ""
             retrieval_payload = self._community_results_to_retrieval(community_data)
+            modal_segments = overall_modal_summary.segments if overall_modal_summary else []
+            modal_asset_urls = overall_modal_summary.asset_urls if overall_modal_summary else []
+            modal_context_text = "\n\n".join(overall_modal_summary.contexts) if overall_modal_summary else ""
 
             structured_result = {
                 "query": query,
@@ -312,6 +427,10 @@ class GlobalSearchTool(BaseSearchTool):
                 "intermediate_results": intermediate_results,
                 "final_answer": final_answer,
                 "retrieval_results": retrieval_payload,
+                "communities": community_data,
+                "modal_segments": modal_segments,
+                "modal_asset_urls": modal_asset_urls,
+                "modal_context": modal_context_text,
             }
 
             self.cache_manager.set(structured_cache_key, structured_result)
@@ -329,7 +448,11 @@ class GlobalSearchTool(BaseSearchTool):
                 "intermediate_results": [],
                 "final_answer": f"搜索过程中出现错误: {str(e)}",
                 "retrieval_results": [],
+                "communities": [],
                 "error": str(e),
+                "modal_segments": [],
+                "modal_asset_urls": [],
+                "modal_context": "",
             }
     
     def get_tool(self) -> BaseTool:

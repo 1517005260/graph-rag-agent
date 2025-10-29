@@ -186,12 +186,26 @@ class IncrementalGraphUpdater:
                         if "chunks" in doc and doc["chunks"]:
                             # 创建文档节点
                             self.console.print(f"[blue]为文件 {doc['filename']} 创建文档节点[/blue]")
-                            self.struct_builder.create_document(
-                                type="local",
-                                uri=str(self.files_dir),
-                                file_name=doc["filename"],
-                                domain="document"
-                            )
+                            extra_props = {}
+                            if doc.get("mineru_task_id"):
+                                extra_props["mineruTaskId"] = doc["mineru_task_id"]
+                            if doc.get("mineru_output_dir"):
+                                extra_props["mineruOutputDir"] = doc["mineru_output_dir"]
+                            if extra_props:
+                                self.struct_builder.create_document(
+                                    type="local",
+                                    uri=str(self.files_dir),
+                                    file_name=doc["filename"],
+                                    domain="document",
+                                    extra_properties=extra_props,
+                                )
+                            else:
+                                self.struct_builder.create_document(
+                                    type="local",
+                                    uri=str(self.files_dir),
+                                    file_name=doc["filename"],
+                                    domain="document",
+                                )
                             
                             # 创建chunk节点和关系
                             chunks_count = len(doc['chunks']) if doc['chunks'] else 0

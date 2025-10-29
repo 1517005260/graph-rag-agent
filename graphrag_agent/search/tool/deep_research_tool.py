@@ -182,137 +182,140 @@ class DeepResearchTool(BaseSearchTool):
         返回:
             function: 知识库检索函数
         """
+        def _empty_payload():
+            return {
+                "chunks": [],
+                "doc_aggs": [],
+                "entities": [],
+                "relationships": [],
+                "Chunks": [],
+                "modal_segments": [],
+                "modal_asset_urls": [],
+                "modal_context": "",
+                "retrieval_results": [],
+            }
+
         def kb_retrieve(question: str, limit: int = 5):
             """基于问题检索知识库内容"""
             try:
-                # 记录开始检索
                 self._log(f"\n[KB检索] 开始搜索: {question}")
+                structured = self.local_tool.structured_search({"query": question})
+                if not isinstance(structured, dict):
+                    self._log("\n[KB检索] 结构化结果为空或类型异常，返回空结果")
+                    return _empty_payload()
 
-                # 使用本地搜索工具
-                result = self.local_tool.search(question)
-                self._log(f"\n[KB检索] 原始结果: {result}" if isinstance(result, str) else f"\n[KB检索] 原始结果类型: {type(result)}")
-                
-                # 检查结果是否为空
-                if not result:
-                    print("\n[KB检索] 搜索结果为空")
-                    return {
-                        "chunks": [],
-                        "doc_aggs": [],
-                        "entities": [],
-                        "relationships": [],
-                        "Chunks": []
-                    }
-                    
-                # 解析结果
-                try:
-                    data_dict = self._parse_search_result(result)
-                    self._log(f"\n[KB检索] 解析结果: {data_dict.keys()}")
-                except Exception as parse_e:
-                    print(f"\n[KB检索] 解析结果失败: {parse_e}")
-                    # 如果解析失败但结果是字符串，创建一个简单的chunk
-                    if isinstance(result, str) and len(result) > 10:
-                        return {
-                            "chunks": [{
-                                "chunk_id": "text_content",
-                                "text": result,
-                                "content_with_weight": result,
-                                "weight": 1.0
-                            }],
-                            "doc_aggs": [],
-                            "entities": [],
-                            "relationships": [],
-                            "Chunks": ["text_content"]
-                        }
-                    return {
-                        "chunks": [],
-                        "doc_aggs": [],
-                        "entities": [],
-                        "relationships": [],
-                        "Chunks": []
-                    }
-                
-                # 标准化数据结构
-                if "data" in data_dict:
-                    data = data_dict["data"]
+                raw_context = structured.get("raw_context") or []
+                retrieval_results = structured.get("retrieval_results") or []
+                modal_segments = structured.get("modal_segments") or []
+                modal_asset_urls = structured.get("modal_asset_urls") or []
+                modal_context_text = structured.get("modal_context") or ""
+
+                if not isinstance(modal_segments, list):
+                    modal_segments = [modal_segments]
                 else:
-                    data = data_dict
-                
-                # 提取各类信息
-                entities = data.get("Entities", [])
-                reports = data.get("Reports", [])
-                relationships = data.get("Relationships", [])
-                chunk_ids = data.get("Chunks", [])
-                
-                # 如果data中已经有完整的chunks列表，直接使用
-                if "chunks" in data and isinstance(data["chunks"], list) and data["chunks"]:
-                    return data
-                
-                # 否则构建 chunks 列表
+                    modal_segments = list(modal_segments)
+
+                if not isinstance(modal_asset_urls, list):
+                    modal_asset_urls = [modal_asset_urls]
+                else:
+                    modal_asset_urls = list(modal_asset_urls)
+
                 chunks = []
-                doc_aggs = []
-                
-                # 检查是否有真实的chunk_ids
-                if chunk_ids:
-                    for chunk_id in chunk_ids[:limit]:
-                        # 尝试获取真实内容
-                        chunk_content = self._get_chunk_content(chunk_id)
-                        text = chunk_content or f"Chunk内容: {chunk_id}"
-                        
-                        chunks.append({
-                            "chunk_id": chunk_id,
-                            "text": text,
-                            "content_with_weight": text,
-                            "weight": 1.0,
-                            "docnm_kwd": f"Document_{chunk_id}"
-                        })
-                        
-                        # 构造文档聚合
-                        doc_id = chunk_id.split("_")[0] if "_" in chunk_id else chunk_id
-                        if not any(d.get("doc_id") == doc_id for d in doc_aggs):
-                            doc_aggs.append({
-                                "doc_id": doc_id,
-                                "title": f"Document: {doc_id}"
-                            })
-                
-                # 如果原始结果是字符串且没有找到chunks，将整个文本作为一个chunk
-                elif isinstance(result, str) and len(result) > 10 and not chunks:
-                    chunks.append({
+                chunk_ids: List[str] = []
+
+                slice_limit = limit or len(raw_context)
+                for doc in raw_context[:slice_limit]:
+                    metadata = doc.get("metadata", {}) or {}
+                    chunk_id = metadata.get("id") or metadata.get("chunk_id") or metadata.get("source_id")
+                    chunk_id_str = str(chunk_id) if chunk_id else f"chunk_{len(chunks)}"
+                    text = doc.get("page_content", "") or ""
+                    modal_context = metadata.get("modal_context") or ""
+                    if modal_context and modal_context not in text:
+                        text = (f"{text}\n\n{modal_context}" if text else modal_context).strip()
+
+                    chunk_entry = {
+                        "chunk_id": chunk_id_str,
+                        "text": text,
+                        "content_with_weight": text,
+                        "weight": metadata.get("confidence", 1.0),
+                        "docnm_kwd": metadata.get("source") or chunk_id_str,
+                        "modal_segments": list(metadata.get("modal_segments") or []),
+                        "modal_asset_urls": list(metadata.get("modal_asset_urls") or []),
+                        "modal_context": modal_context,
+                        "source": metadata.get("source"),
+                    }
+
+                    if metadata.get("document_name"):
+                        chunk_entry["doc_id"] = metadata["document_name"]
+
+                    asset_urls = chunk_entry["modal_asset_urls"]
+                    if asset_urls:
+                        chunk_entry["url"] = asset_urls[0]
+
+                    chunks.append(chunk_entry)
+                    chunk_ids.append(chunk_id_str)
+
+                if not chunks and structured.get("answer"):
+                    answer_text = structured.get("answer") or ""
+                    chunk_entry = {
                         "chunk_id": "text_result",
-                        "text": result,
-                        "content_with_weight": result,
+                        "text": answer_text,
+                        "content_with_weight": answer_text,
                         "weight": 1.0,
-                        "docnm_kwd": "Document_text"
-                    })
-                    doc_aggs.append({
-                        "doc_id": "text",
-                        "title": "Document: text"
-                    })
-                    chunk_ids = ["text_result"]
-                
-                # 记录结果统计
-                self._log(f"\n[KB检索] 结果: {len(chunks)}个chunks, {len(entities)}个实体, {len(relationships)}个关系")
-                
+                        "docnm_kwd": "text_result",
+                        "modal_segments": [],
+                        "modal_asset_urls": [],
+                        "modal_context": "",
+                    }
+                    chunks.append(chunk_entry)
+                    chunk_ids.append("text_result")
+
+                entities = []
+                relationships = []
+                for item in retrieval_results:
+                    metadata = item.get("metadata", {}) or {}
+                    extra = metadata.get("extra") or {}
+                    source_type = metadata.get("source_type")
+                    if source_type == "entity":
+                        entities.append(
+                            extra.get("raw_entity")
+                            or {
+                                "id": metadata.get("source_id"),
+                                "description": item.get("evidence", ""),
+                            }
+                        )
+                    elif source_type == "relationship":
+                        relationships.append(
+                            extra.get("raw_relationship")
+                            or {
+                                "id": metadata.get("source_id"),
+                                "description": item.get("evidence", ""),
+                            }
+                        )
+
+                modal_asset_count = len(modal_asset_urls)
+                self._log(
+                    f"\n[KB检索] 结果统计: chunks={len(chunks)}, entities={len(entities)}, "
+                    f"relationships={len(relationships)}, assets={modal_asset_count}"
+                )
+
                 return {
                     "chunks": chunks,
-                    "doc_aggs": doc_aggs,
+                    "doc_aggs": raw_context,
                     "entities": entities,
-                    "reports": reports,
                     "relationships": relationships,
-                    "Chunks": [c.get("chunk_id") for c in chunks]
+                    "Chunks": chunk_ids,
+                    "modal_segments": modal_segments,
+                    "modal_asset_urls": modal_asset_urls,
+                    "modal_context": modal_context_text,
+                    "retrieval_results": retrieval_results,
                 }
             except Exception as e:
-                print(f"\n[KB检索错误] {str(e)}")
-                print(traceback.format_exc())
-                return {
-                    "chunks": [],
-                    "doc_aggs": [],
-                    "entities": [],
-                    "relationships": [],
-                    "Chunks": []
-                }
-        
+                self._log(f"\n[KB检索] 处理异常: {str(e)}")
+                return _empty_payload()
+
         return kb_retrieve
-    
+
     def _create_kg_retrieval_func(self):
         """
         创建知识图谱检索函数

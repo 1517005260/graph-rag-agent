@@ -97,16 +97,36 @@ def results_from_documents(
         )
         community_id = metadata_dict.get("community_id") or metadata_dict.get("community")
         score = float(score_value or default_confidence)
+        extra: Dict[str, Any] = {
+            "source": metadata_dict.get("source"),
+            "document_id": metadata_dict.get("document_id"),
+            "raw_metadata": metadata_dict,
+        }
+        modal_segments = metadata_dict.get("modal_segments") or []
+        if modal_segments:
+            extra["modal_segments"] = modal_segments
+            extra["modal_asset_urls"] = [
+                segment.get("image_url")
+                for segment in modal_segments
+                if isinstance(segment, dict) and segment.get("image_url")
+            ]
+            extra["modal_segment_ids"] = [
+                segment.get("segment_id")
+                for segment in modal_segments
+                if isinstance(segment, dict) and segment.get("segment_id")
+            ]
+        modal_context = metadata_dict.get("modal_context")
+        if modal_context:
+            extra["modal_context"] = modal_context
+            if modal_context not in page_content:
+                page_content = f"{page_content}\n\n{modal_context}".strip()
+
         metadata = create_retrieval_metadata(
             source_id=source_id,
             source_type="chunk",
             confidence=metadata_dict.get("confidence", score),
             community_id=community_id,
-            extra={
-                "source": metadata_dict.get("source"),
-                "document_id": metadata_dict.get("document_id"),
-                "raw_metadata": metadata_dict,
-            },
+            extra=extra,
         )
         evidence = page_content
         results.append(

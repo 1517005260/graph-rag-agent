@@ -96,6 +96,9 @@ MINERU_OUTPUT_DIR = _resolve_project_path(os.getenv("MINERU_OUTPUT_DIR"), "./min
 MINERU_TEMP_DIR = _resolve_project_path(os.getenv("MINERU_TEMP_DIR"), "./.tmp/mineru_temp")
 MINERU_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 MINERU_TEMP_DIR.mkdir(parents=True, exist_ok=True)
+MINERU_ASSET_BASE_URL = os.getenv("MINERU_ASSET_BASE_URL")
+if not MINERU_ASSET_BASE_URL:
+    MINERU_ASSET_BASE_URL = f"{MINERU_API_URL}/download"
 
 MINERU_CACHE_REGISTRY_PATH = _resolve_project_path(
     os.getenv("MINERU_CACHE_REGISTRY"), "./cache/mineru_registry.json"
@@ -336,9 +339,14 @@ LOCAL_SEARCH_SETTINGS = {
 GLOBAL_SEARCH_SETTINGS = {
     "default_level": _get_env_int("GLOBAL_SEARCH_LEVEL", 0) or 0,
     "community_batch_size": _get_env_int("GLOBAL_SEARCH_BATCH_SIZE", 5) or 5,
+    "community_chunk_limit": _get_env_int("GLOBAL_SEARCH_CHUNK_LIMIT", 5) or 5,
 }
 
 NAIVE_SEARCH_TOP_K = _get_env_int("NAIVE_SEARCH_TOP_K", 3) or 3
+_raw_naive_candidate_limit = _get_env_int("NAIVE_SEARCH_CANDIDATE_LIMIT", 2000)
+NAIVE_SEARCH_CANDIDATE_LIMIT = (
+    None if _raw_naive_candidate_limit is None or _raw_naive_candidate_limit <= 0 else _raw_naive_candidate_limit
+)
 
 HYBRID_SEARCH_SETTINGS = {
     "entity_limit": _get_env_int("HYBRID_SEARCH_ENTITY_LIMIT", 15) or 15,

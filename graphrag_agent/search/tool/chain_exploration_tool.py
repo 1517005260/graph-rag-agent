@@ -4,6 +4,7 @@ from langchain_core.tools import BaseTool
 
 from graphrag_agent.models.get_models import get_llm_model, get_embeddings_model
 from graphrag_agent.graph.core import connection_manager
+from graphrag_agent.search.modal_enricher import ModalEnricher
 from graphrag_agent.search.retrieval_adapter import (
     merge_retrieval_results,
     results_from_documents,
@@ -24,6 +25,7 @@ class ChainOfExplorationTool:
         self.embeddings = get_embeddings_model()
         self.graph = connection_manager.get_connection()
         self.searcher = ChainOfExplorationSearcher(self.graph, self.llm, self.embeddings)
+        self.modal_enricher = ModalEnricher()
 
     def explore(
         self,
@@ -45,6 +47,35 @@ class ChainOfExplorationTool:
             exploration_width=exploration_width or self.exploration_width,
         )
 
+        content_items = results.get("content", []) or []
+        chunk_ids: List[str] = []
+        for item in content_items:
+            metadata = item.get("metadata") or {}
+            chunk_id = item.get("id") or item.get("chunk_id") or metadata.get("id")
+            if chunk_id:
+                chunk_ids.append(str(chunk_id))
+
+        modal_summary = None
+        if chunk_ids:
+            modal_map = self.modal_enricher.fetch_modal_map(chunk_ids)
+            modal_summary = self.modal_enricher.aggregate_modal_summary(modal_map=modal_map)
+            for item in content_items:
+                metadata = item.setdefault("metadata", {})
+                chunk_id = item.get("id") or item.get("chunk_id") or metadata.get("id")
+                if chunk_id:
+                    metadata.setdefault("id", chunk_id)
+                modal_data = modal_map.get(str(chunk_id)) if chunk_id else None
+                if not modal_data:
+                    continue
+                metadata["modal_segments"] = modal_data.get("modal_segments", [])
+                metadata["modal_asset_urls"] = modal_data.get("modal_asset_urls", [])
+                metadata["modal_context"] = modal_data.get("modal_context", "")
+                if modal_data.get("modal_context"):
+                    current_text = item.get("text") or ""
+                    if modal_data["modal_context"] not in current_text:
+                        merged_text = f"{current_text}\n\n{modal_data['modal_context']}" if current_text else modal_data["modal_context"]
+                        item["text"] = merged_text.strip()
+
         entity_results = results_from_entities(
             results.get("entities", []), source="chain_exploration"
         )
@@ -61,11 +92,19 @@ class ChainOfExplorationTool:
             entity_results, relation_results, content_results
         )
 
+        if modal_summary:
+            results["modal_segments"] = modal_summary.segments
+            results["modal_asset_urls"] = modal_summary.asset_urls
+            results["modal_context"] = "\n\n".join(modal_summary.contexts)
+
         summary = {
             "exploration_path": results.get("exploration_path", []),
             "statistics": results.get("statistics", {}),
             "communities": results.get("communities", []),
         }
+        if modal_summary:
+            summary["modal_asset_urls"] = modal_summary.asset_urls
+            summary["modal_context"] = "\n\n".join(modal_summary.contexts)
 
         return {
             "query": query,
@@ -73,6 +112,9 @@ class ChainOfExplorationTool:
             "summary": summary,
             "raw_result": results,
             "retrieval_results": results_to_payload(merged_results),
+            "modal_segments": modal_summary.segments if modal_summary else [],
+            "modal_asset_urls": modal_summary.asset_urls if modal_summary else [],
+            "modal_context": "\n\n".join(modal_summary.contexts) if modal_summary else "",
         }
 
     def get_tool(self) -> BaseTool:

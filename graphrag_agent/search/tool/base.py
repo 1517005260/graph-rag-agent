@@ -9,6 +9,7 @@ from graphrag_agent.cache_manager.manager import CacheManager, ContextAndKeyword
 from graphrag_agent.config.neo4jdb import get_db_manager
 from graphrag_agent.search.utils import VectorUtils
 from graphrag_agent.config.settings import BASE_SEARCH_CONFIG
+from graphrag_agent.search.modal_enricher import ModalEnricher
 
 
 class BaseSearchTool(ABC):
@@ -47,6 +48,7 @@ class BaseSearchTool(ABC):
         
         # 初始化Neo4j连接
         self._setup_neo4j()
+        self.modal_enricher = ModalEnricher(self.driver)
     
     def _setup_neo4j(self):
         """设置Neo4j连接"""

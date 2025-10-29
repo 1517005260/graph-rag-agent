@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 import time
 import json
 from langsmith import traceable
@@ -189,6 +189,7 @@ class LocalSearchTool(BaseSearchTool):
 
             answer = chain_output.get("answer") or "抱歉，我无法回答这个问题。"
             documents = chain_output.get("context") or []
+            modal_summary = self.local_searcher.aggregate_modal_summary(documents)
             retrieval_results = results_to_payload(
                 results_from_documents(documents, source="local_search")
             )
@@ -202,6 +203,9 @@ class LocalSearchTool(BaseSearchTool):
                     {"page_content": getattr(doc, "page_content", ""), "metadata": getattr(doc, "metadata", {})}
                     for doc in documents
                 ],
+                "modal_segments": modal_summary.segments,
+                "modal_asset_urls": modal_summary.asset_urls,
+                "modal_context": "\n\n".join(modal_summary.contexts),
             }
 
             # 缓存结构化结果与纯文本答案

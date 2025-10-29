@@ -194,12 +194,26 @@ class KnowledgeGraphBuilder:
                 self.struct_builder.clear_database()
                 for doc in self.processed_documents:
                     if "chunks" in doc and doc["chunks"]:  # 只处理成功分块的文档
-                        self.struct_builder.create_document(
-                            type="local",
-                            uri=str(FILES_DIR),
-                            file_name=doc["filename"],
-                            domain=theme
-                        )
+                        extra_props = {}
+                        if doc.get("mineru_task_id"):
+                            extra_props["mineruTaskId"] = doc["mineru_task_id"]
+                        if doc.get("mineru_output_dir"):
+                            extra_props["mineruOutputDir"] = doc["mineru_output_dir"]
+                        if extra_props:
+                            self.struct_builder.create_document(
+                                type="local",
+                                uri=str(FILES_DIR),
+                                file_name=doc["filename"],
+                                domain=theme,
+                                extra_properties=extra_props,
+                            )
+                        else:
+                            self.struct_builder.create_document(
+                                type="local",
+                                uri=str(FILES_DIR),
+                                file_name=doc["filename"],
+                                domain=theme,
+                            )
                 progress.advance(task)
                 
                 # 创建Chunk节点和关系 - 优化：使用并行处理大文件
