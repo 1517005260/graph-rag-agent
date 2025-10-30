@@ -4,6 +4,8 @@
 所有提示模板常量集中在此包中，确保配置一致。
 """
 
+from typing import Optional
+
 from graphrag_agent.config.prompts.graph_prompts import (
     system_template_build_graph,
     human_template_build_graph,
@@ -38,6 +40,7 @@ from graphrag_agent.config.prompts.qa_prompts import (
     MAP_SYSTEM_PROMPT,
     REDUCE_SYSTEM_PROMPT,
     contextualize_q_system_prompt,
+    MINERU_IMAGE_DESCRIPTION_PROMPT,
 )
 from graphrag_agent.config.prompts.reasoning_prompts import (
     BEGIN_SEARCH_QUERY,
@@ -117,6 +120,7 @@ __all__ = [
     "MAP_SYSTEM_PROMPT",
     "REDUCE_SYSTEM_PROMPT",
     "contextualize_q_system_prompt",
+    "MINERU_IMAGE_DESCRIPTION_PROMPT",
     # 深度推理模板
     "BEGIN_SEARCH_QUERY",
     "END_SEARCH_QUERY",
@@ -159,3 +163,24 @@ __all__ = [
     "CONCLUSION_PROMPT",
     "TERMINOLOGY_PROMPT",
 ]
+
+PROMPT_REGISTRY = {
+    name.lower(): value
+    for name, value in globals().items()
+    if name.isupper() and isinstance(value, str)
+}
+
+
+def get_prompt_by_name(name: Optional[str], default: Optional[str] = None) -> Optional[str]:
+    """根据名称（不区分大小写）获取提示模板。"""
+    if not name:
+        return default
+    return PROMPT_REGISTRY.get(name.lower(), default)
+
+
+__all__.extend(
+    [
+        "PROMPT_REGISTRY",
+        "get_prompt_by_name",
+    ]
+)

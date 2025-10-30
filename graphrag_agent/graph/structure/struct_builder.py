@@ -254,6 +254,7 @@ class GraphStructureBuilder:
                     "latex": segment.get("latex"),
                     "image_caption": segment.get("image_caption") or [],
                     "image_footnote": segment.get("image_footnote") or [],
+                    "vision_summary": segment.get("vision_summary"),
                 }
             )
 
@@ -279,7 +280,8 @@ class GraphStructureBuilder:
             s.tableFootnote = data.table_footnote,
             s.latex = data.latex,
             s.imageCaption = data.image_caption,
-            s.imageFootnote = data.image_footnote
+            s.imageFootnote = data.image_footnote,
+            s.visionSummary = data.vision_summary
         WITH s, data
         MATCH (d:`__Document__` {fileName: data.file_name})
         MERGE (d)-[:HAS_MODAL_SEGMENT]->(s)

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """多模态渲染辅助模块。
 
 负责将检索阶段返回的多模态段落（特别是图片）转换为便于前端/LLM消费的结构。
@@ -129,6 +127,7 @@ class ModalAssetProcessor:
                     footnotes=tuple(segment.get("image_footnote") or []),
                     source=segment.get("source"),
                     page_index=segment.get("page_index"),
+                    vision_summary=segment.get("vision_summary"),
                 )
             )
         return details
@@ -237,17 +236,29 @@ class ModalAssetProcessor:
         details = self._build_details(image_segments)
         image_urls = [detail.url for detail in details if detail.url]
 
-        base64_images = self._load_images_for_vision(image_urls)
-        vision_analysis = self._invoke_vision_model(
-            question=question,
-            context=context or answer or "",
-            base64_images=base64_images,
-        )
+        missing_summary = any(not detail.vision_summary for detail in details)
+        vision_analysis: Optional[str] = None
 
-        # 将整体视觉摘要分配给各个图片详情
-        if vision_analysis:
-            for detail in details:
-                detail.vision_summary = vision_analysis
+        if missing_summary:
+            base64_images = self._load_images_for_vision(image_urls)
+            vision_analysis = self._invoke_vision_model(
+                question=question,
+                context=context or answer or "",
+                base64_images=base64_images,
+            )
+
+            if vision_analysis:
+                for detail in details:
+                    detail.vision_summary = vision_analysis
+        else:
+            if details:
+                collected = [
+                    detail.vision_summary.strip()
+                    for detail in details
+                    if isinstance(detail.vision_summary, str)
+                ]
+                if collected:
+                    vision_analysis = "\n".join(dict.fromkeys(collected))
 
         markdown = self._compose_markdown(details, vision_analysis)
         return ModalEnhancement(

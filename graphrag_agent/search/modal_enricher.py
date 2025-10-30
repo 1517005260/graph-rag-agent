@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import quote
@@ -64,7 +62,8 @@ class ModalEnricher:
                             table_html: s_props["tableHtml"],
                             table_caption: s_props["tableCaption"],
                             table_footnote: coalesce(s_props["tableFootnote"], []),
-                            latex: s_props["latex"]
+                            latex: s_props["latex"],
+                            vision_summary: s_props["visionSummary"]
                         }
                     END
                 ) AS raw_segments
@@ -271,6 +270,7 @@ class ModalEnricher:
                 "table_caption": segment.get("table_caption"),
                 "table_footnote": segment.get("table_footnote") or [],
                 "latex": segment.get("latex"),
+                "vision_summary": segment.get("vision_summary"),
             }
             image_url = self._build_image_url(
                 payload.get("image_relative_path"),
@@ -305,6 +305,8 @@ class ModalEnricher:
                     lines.append(f"  图片路径: {segment['image_relative_path']}")
                 if segment.get("text"):
                     lines.append(f"  图片描述: {segment['text']}")
+                if segment.get("vision_summary"):
+                    lines.append(f"  视觉摘要: {segment['vision_summary']}")
                 if segment.get("image_caption"):
                     lines.append(f"  图注: {'；'.join(segment['image_caption'])}")
                 if segment.get("image_footnote"):

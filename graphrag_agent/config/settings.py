@@ -145,6 +145,9 @@ MINERU_DUMP_MODEL_OUTPUT = _get_env_bool("MINERU_DUMP_MODEL_OUTPUT", False)
 
 MINERU_DEVICE_MODE = os.getenv("MINERU_DEVICE_MODE", "auto")
 
+MINERU_VISION_SUMMARY_ENABLE = _get_env_bool("MINERU_VISION_SUMMARY_ENABLE", False)
+MINERU_VISION_PROMPT_NAME = os.getenv("MINERU_VISION_PROMPT_NAME", "mineru_image_description_prompt")
+
 # ===== 知识库与系统参数 =====
 
 KB_NAME = "华东理工大学"  # 知识库主题，用于deepsearch

@@ -26,6 +26,10 @@ from graphrag_agent.config.settings import (
 from graphrag_agent.pipelines.ingestion.file_reader import FileReader
 from graphrag_agent.pipelines.ingestion.text_chunker import ChineseTextChunker
 from graphrag_agent.pipelines.mineru_client import MinerUClient, ParseOptions, ParseResult
+from graphrag_agent.pipelines.ingestion.mineru_enhancers import (
+    load_image_summary_prompt,
+    augment_image_segments_with_vision,
+)
 
 
 MINERU_CACHE_VERSION = "1.0"
@@ -183,6 +187,8 @@ class DocumentProcessor:
         self._mineru_option_signature: Optional[str] = None
         if self.mode == "mineru":
             self._init_mineru()
+
+        self._vision_prompt: Optional[str] = load_image_summary_prompt()
 
     def _init_mineru(self) -> None:
         """初始化 MinerU 客户端"""
@@ -557,7 +563,30 @@ class DocumentProcessor:
             raise ValueError("缓存数据缺失，无法使用 MinerU 缓存结果")
 
         segments = payload.get("modal_segments") or payload.get("segments") or []
-        rich_text = payload.get("content") or ""
+        cached_output_dir = (
+            payload.get("mineru_output_dir")
+            or payload.get("output_dir")
+            or payload.get("method_dir")
+        )
+        method_dir = None
+        if cached_output_dir:
+            try:
+                method_dir = Path(cached_output_dir)
+            except Exception:
+                method_dir = None
+
+        if segments:
+            if self._vision_prompt:
+                augment_image_segments_with_vision(segments, method_dir, self._vision_prompt)
+            rich_text = "\n\n".join(
+                (segment.get("text") or "").strip()
+                for segment in segments
+                if segment.get("text")
+            )
+            if not rich_text:
+                rich_text = payload.get("content") or ""
+        else:
+            rich_text = payload.get("content") or ""
 
         result: Dict[str, Any] = {
             "filepath": relative_path,
@@ -630,6 +659,9 @@ class DocumentProcessor:
                 return markdown_text, [{"type": "markdown", "text": markdown_text}]
             except Exception as exc:
                 print(f"读取 MinerU Markdown 失败 ({parse_result.markdown_path}): {exc}")
+
+        if segments and self._vision_prompt:
+            augment_image_segments_with_vision(segments, method_dir, self._vision_prompt)
 
         rich_text = "\n\n".join(
             segment["text"].strip() for segment in segments if segment.get("text")
