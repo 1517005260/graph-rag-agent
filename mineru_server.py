@@ -11,6 +11,10 @@ MinerU API Server for GraphRAG Agent
 - 多模态 Markdown 输出
 - 批量处理支持
 - 异步处理
+
+使用：
+conda activate mineru
+python mineru_server.py
 """
 
 import os
@@ -116,9 +120,6 @@ class MinerUConfig:
     # 设备配置
     DEVICE_MODE = os.getenv("MINERU_DEVICE_MODE", "auto")  # auto, cuda, cpu
 
-    # 保留时间（小时）
-    OUTPUT_RETENTION_HOURS = int(os.getenv("MINERU_OUTPUT_RETENTION_HOURS", "24"))
-
     @classmethod
     def setup_environment(cls):
         """设置 MinerU 环境变量"""
@@ -210,18 +211,10 @@ async def lifespan(app: FastAPI):
     logger.info(f"Output directory: {MinerUConfig.OUTPUT_DIR}")
     logger.info(f"Temp directory: {MinerUConfig.TEMP_DIR}")
 
-    # 启动后台清理任务
-    cleanup_task = asyncio.create_task(periodic_cleanup())
-
     yield
 
     # 关闭时清理
     logger.info("Shutting down MinerU API Server...")
-    cleanup_task.cancel()
-    try:
-        await cleanup_task
-    except asyncio.CancelledError:
-        pass
 
 
 # ============== FastAPI 应用 ==============
@@ -454,8 +447,7 @@ async def get_config():
         "lang": MinerUConfig.DEFAULT_LANG,
         "formula_enable": MinerUConfig.FORMULA_ENABLE,
         "table_enable": MinerUConfig.TABLE_ENABLE,
-        "device_mode": os.environ.get('MINERU_DEVICE_MODE'),
-        "output_retention_hours": MinerUConfig.OUTPUT_RETENTION_HOURS
+        "device_mode": os.environ.get('MINERU_DEVICE_MODE')
     }
 
 
@@ -646,89 +638,6 @@ async def download_file(task_id: str, filename: str):
             )
 
     raise HTTPException(status_code=404, detail=f"File {filename} not found in task {task_id}")
-
-
-@app.delete("/cleanup/{task_id}")
-async def cleanup_task(task_id: str):
-    """
-    清理指定任务的输出文件
-
-    Args:
-        task_id: 任务ID
-    """
-    output_dir = MinerUConfig.OUTPUT_DIR / task_id
-
-    if not output_dir.exists():
-        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
-
-    try:
-        shutil.rmtree(output_dir)
-        return {"status": "success", "message": f"Task {task_id} cleaned up"}
-    except Exception as e:
-        logger.exception(f"Failed to cleanup task {task_id}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/cleanup/old")
-async def cleanup_old_outputs(hours: int = MinerUConfig.OUTPUT_RETENTION_HOURS):
-    """
-    清理超过指定时间的输出文件
-
-    Args:
-        hours: 保留时间（小时）
-    """
-    cleaned_count = 0
-    current_time = datetime.now()
-
-    try:
-        for task_dir in MinerUConfig.OUTPUT_DIR.iterdir():
-            if task_dir.is_dir():
-                # 检查目录修改时间
-                mtime = datetime.fromtimestamp(task_dir.stat().st_mtime)
-                age_hours = (current_time - mtime).total_seconds() / 3600
-
-                if age_hours > hours:
-                    shutil.rmtree(task_dir)
-                    cleaned_count += 1
-                    logger.info(f"Cleaned up old task: {task_dir.name} (age: {age_hours:.1f}h)")
-
-        return {
-            "status": "success",
-            "cleaned_count": cleaned_count,
-            "retention_hours": hours
-        }
-
-    except Exception as e:
-        logger.exception("Failed to cleanup old outputs")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ============== 后台任务 ==============
-async def periodic_cleanup():
-    """定期清理过期文件"""
-    while True:
-        try:
-            await asyncio.sleep(3600)  # 每小时执行一次
-
-            current_time = datetime.now()
-            cleaned_count = 0
-
-            for task_dir in MinerUConfig.OUTPUT_DIR.iterdir():
-                if task_dir.is_dir():
-                    mtime = datetime.fromtimestamp(task_dir.stat().st_mtime)
-                    age_hours = (current_time - mtime).total_seconds() / 3600
-
-                    if age_hours > MinerUConfig.OUTPUT_RETENTION_HOURS:
-                        shutil.rmtree(task_dir)
-                        cleaned_count += 1
-
-            if cleaned_count > 0:
-                logger.info(f"Periodic cleanup: removed {cleaned_count} old tasks")
-
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logger.exception("Error in periodic cleanup")
 
 
 # ============== 主函数 ==============
