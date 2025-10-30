@@ -176,6 +176,14 @@ class NaiveSearchTool(BaseSearchTool):
                 "context": context,
                 "response_type": response_type
             })
+            modal_context_text = "\n\n".join(modal_summary.contexts)
+            modal_enhancement = self.modal_asset_processor.enhance_answer(
+                question=query,
+                answer=answer,
+                modal_summary=modal_summary,
+                context=modal_context_text,
+            )
+            enhanced_answer = modal_enhancement.apply_to_answer(answer)
             
             llm_time = time.time() - llm_start
             self.performance_metrics["llm_time"] = llm_time
@@ -186,18 +194,23 @@ class NaiveSearchTool(BaseSearchTool):
                     "Chunks": list(dict.fromkeys(chunk_ids))[:5],
                     "modalAssets": modal_summary.asset_urls,
                     "modalContexts": modal_summary.contexts,
+                    "imageMarkdown": modal_enhancement.markdown,
+                    "visionAnalysis": modal_enhancement.vision_analysis,
+                    "modalImageDetails": [
+                        detail.to_dict() for detail in modal_enhancement.image_details
+                    ],
                 }
             }
-            answer += f"\n\n{json.dumps(reference_payload, ensure_ascii=False)}"
+            enhanced_answer += f"\n\n{json.dumps(reference_payload, ensure_ascii=False)}"
             
             # 缓存结果
-            self.cache_manager.set(cache_key, answer)
+            self.cache_manager.set(cache_key, enhanced_answer)
             
             # 记录总耗时
             total_time = time.time() - overall_start
             self.performance_metrics["total_time"] = total_time
             
-            return answer
+            return enhanced_answer
             
         except Exception as e:
             error_msg = f"搜索过程中出现错误: {str(e)}"

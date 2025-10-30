@@ -11,6 +11,8 @@ LOCAL_SEARCH_CONTEXT_PROMPT = dedent(
 
     {context}
 
+    若分析报告中出现“多模态补充信息”或提供图片/表格URL，请结合这些线索理解内容，并在回答中指引可用的资源链接。
+
     用户的问题是：
     {input}
 
@@ -42,6 +44,8 @@ GLOBAL_SEARCH_MAP_PROMPT = dedent(
     ---数据表格---
     {context_data}
 
+    如果数据表格中包含多模态补充信息（例如图片URL或表格解释），请一并纳入分析。
+
     用户的问题是：
     {question}
     """
@@ -51,6 +55,8 @@ GLOBAL_SEARCH_REDUCE_PROMPT = dedent(
     """
     ---分析报告---
     {report_data}
+
+    如分析报告包含多模态补充信息（图片URL、表格描述等），请在整合回答时予以引用。
 
     用户的问题是：
     {question}
@@ -88,7 +94,7 @@ HYBRID_TOOL_QUERY_PROMPT = dedent(
     请综合利用上述信息回答问题，确保回答全面且有深度。
     回答格式应包含：
     1. 主要内容（使用清晰的段落展示）
-    2. 在末尾标明引用的数据来源
+    2. 在末尾标明引用的数据来源；若存在多模态资源，请说明如何访问这些图片或表格
     """
 ).strip()
 
@@ -96,6 +102,8 @@ NAIVE_SEARCH_QUERY_PROMPT = dedent(
     """
     ---文档片段---
     {context}
+
+    若片段中包含“多模态补充信息”或图片URL，请结合这些视觉线索辅助回答。
 
     问题：
     {query}

@@ -585,20 +585,34 @@ class HybridSearchTool(BaseSearchTool):
                 "high_level": high_level_content,
                 "response_type": response_type
             })
-            
+            modal_summary = self.modal_enricher.aggregate_modal_summary(modal_map=low_modal_map)
+            modal_context_text = "\n\n".join(modal_summary.contexts) if modal_summary else ""
+            modal_enhancement = self.modal_asset_processor.enhance_answer(
+                question=query,
+                answer=answer,
+                modal_summary=modal_summary,
+                context=modal_context_text,
+            )
+            enhanced_answer = modal_enhancement.apply_to_answer(answer)
+
             self.performance_metrics["llm_time"] += time.time() - llm_start
             
             all_evidence = merge_retrieval_results(low_evidence, high_evidence)
-            modal_summary = self.modal_enricher.aggregate_modal_summary(modal_map=low_modal_map)
             structured_result = {
                 "query": query,
                 "low_level_content": low_level_content,
                 "high_level_content": high_level_content,
-                "final_answer": answer if answer else "未找到相关信息",
+                "final_answer": enhanced_answer if enhanced_answer else "未找到相关信息",
+                "raw_final_answer": answer,
                 "retrieval_results": results_to_payload(all_evidence),
                 "modal_segments": modal_summary.segments,
                 "modal_asset_urls": modal_summary.asset_urls,
                 "modal_context": "\n\n".join(modal_summary.contexts),
+                "image_markdown": modal_enhancement.markdown,
+                "vision_analysis": modal_enhancement.vision_analysis,
+                "modal_image_details": [
+                    detail.to_dict() for detail in modal_enhancement.image_details
+                ],
             }
             
             # 缓存结果

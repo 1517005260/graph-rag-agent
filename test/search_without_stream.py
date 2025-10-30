@@ -10,8 +10,8 @@ from graphrag_agent.agents.fusion_agent import FusionGraphRAGAgent
 TEST_CONFIG = {
     "queries": [
         # "优秀学生的申请条件是什么？",
-        "华东理工大学有哪些和国外学校交换项目？",
-        "高校学生资助政策体系是什么？",
+        # "华东理工大学有哪些和国外学校交换项目？",
+        # "‘小花梨’是什么？",
         "平安华理微信公众号二维码是什么？",
         # "学业奖学金有多少钱？",
         # "大学英语考试的标准是什么？",
@@ -74,7 +74,7 @@ def run_tests():
     agents = [
         # {"name": "DeepResearchAgent", "instance": DeepResearchAgent(use_deeper_tool=True)},
         {"name": "NaiveRagAgent", "instance": NaiveRagAgent()},
-        # {"name": "GraphAgent", "instance": GraphAgent()},
+        {"name": "GraphAgent", "instance": GraphAgent()},
         # {"name": "HybridAgent", "instance": HybridAgent()},
         # {"name": "FusionGraphRAGAgent", "instance": FusionGraphRAGAgent()}
     ]

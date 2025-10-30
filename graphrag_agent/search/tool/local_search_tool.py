@@ -190,14 +190,23 @@ class LocalSearchTool(BaseSearchTool):
             answer = chain_output.get("answer") or "抱歉，我无法回答这个问题。"
             documents = chain_output.get("context") or []
             modal_summary = self.local_searcher.aggregate_modal_summary(documents)
+            modal_context_text = "\n\n".join(modal_summary.contexts) if modal_summary else ""
             retrieval_results = results_to_payload(
                 results_from_documents(documents, source="local_search")
             )
+            modal_enhancement = self.modal_asset_processor.enhance_answer(
+                question=query,
+                answer=answer,
+                modal_summary=modal_summary,
+                context=modal_context_text,
+            )
+            enhanced_answer = modal_enhancement.apply_to_answer(answer)
 
             structured_result = {
                 "query": query,
                 "keywords": keywords,
-                "answer": answer,
+                "answer": enhanced_answer,
+                "raw_answer": answer,
                 "retrieval_results": retrieval_results,
                 "raw_context": [
                     {"page_content": getattr(doc, "page_content", ""), "metadata": getattr(doc, "metadata", {})}
@@ -206,12 +215,17 @@ class LocalSearchTool(BaseSearchTool):
                 "modal_segments": modal_summary.segments,
                 "modal_asset_urls": modal_summary.asset_urls,
                 "modal_context": "\n\n".join(modal_summary.contexts),
+                "image_markdown": modal_enhancement.markdown,
+                "vision_analysis": modal_enhancement.vision_analysis,
+                "modal_image_details": [
+                    detail.to_dict() for detail in modal_enhancement.image_details
+                ],
             }
 
             # 缓存结构化结果与纯文本答案
             self.cache_manager.set(structured_cache_key, structured_result)
             if cached_answer is None:
-                self.cache_manager.set(cache_key, answer)
+                self.cache_manager.set(cache_key, enhanced_answer)
 
             self.performance_metrics["total_time"] = time.time() - overall_start
             return structured_result

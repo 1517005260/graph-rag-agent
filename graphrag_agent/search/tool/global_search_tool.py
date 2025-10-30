@@ -420,17 +420,30 @@ class GlobalSearchTool(BaseSearchTool):
             modal_segments = overall_modal_summary.segments if overall_modal_summary else []
             modal_asset_urls = overall_modal_summary.asset_urls if overall_modal_summary else []
             modal_context_text = "\n\n".join(overall_modal_summary.contexts) if overall_modal_summary else ""
+            modal_enhancement = self.modal_asset_processor.enhance_answer(
+                question=query,
+                answer=final_answer or "",
+                modal_summary=overall_modal_summary,
+                context=modal_context_text,
+            )
+            enhanced_answer = modal_enhancement.apply_to_answer(final_answer or "")
 
             structured_result = {
                 "query": query,
                 "keywords": keywords,
                 "intermediate_results": intermediate_results,
-                "final_answer": final_answer,
+                "final_answer": enhanced_answer,
+                "raw_final_answer": final_answer,
                 "retrieval_results": retrieval_payload,
                 "communities": community_data,
                 "modal_segments": modal_segments,
                 "modal_asset_urls": modal_asset_urls,
                 "modal_context": modal_context_text,
+                "image_markdown": modal_enhancement.markdown,
+                "vision_analysis": modal_enhancement.vision_analysis,
+                "modal_image_details": [
+                    detail.to_dict() for detail in modal_enhancement.image_details
+                ],
             }
 
             self.cache_manager.set(structured_cache_key, structured_result)

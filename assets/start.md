@@ -24,11 +24,11 @@ docker run --name one-api -d --restart always \
 
 1. 直接使用第三方代理平台，如[云雾api](https://yunwu.ai/)等，使用方法同one-api，`.env`中api-key写中转站给你的key，url写中转站的url
 
-2. 使用更先进的[new-api](https://github.com/QuantumNous/new-api)，使用方法基本同one-api
+2. **建议**：使用更先进的[new-api](https://github.com/QuantumNous/new-api)，使用方法基本同one-api
 
 ```bash
 # 使用SQLite部署new-api
-docker run --name new-api -d --restart always -p 3000:3000 -e TZ=Asia/Shanghai -v /home/ubuntu/data/new-api:/data calciumion/new-api:latest
+docker run --name new-api -d --restart always -p 13000:3000 -e TZ=Asia/Shanghai -v /home/ubuntu/data/new-api:/data calciumion/new-api:latest
 ```
 
 
