@@ -385,6 +385,15 @@ community_algorithm = "leiden"
 
 ## 构建知识图谱
 
+构建之前先检查模型是否可用：
+
+```bash
+cd cd graph-rag-agent/
+python graphrag_agent/models/get_models.py 
+
+# 出现正常响应和模型嵌入向量即成功
+```
+
 ```bash
 cd graph-rag-agent/
 

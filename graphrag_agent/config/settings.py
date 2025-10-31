@@ -147,6 +147,7 @@ MINERU_DEVICE_MODE = os.getenv("MINERU_DEVICE_MODE", "auto")
 
 MINERU_VISION_SUMMARY_ENABLE = _get_env_bool("MINERU_VISION_SUMMARY_ENABLE", False)
 MINERU_VISION_PROMPT_NAME = os.getenv("MINERU_VISION_PROMPT_NAME", "mineru_image_description_prompt")
+MINERU_VISION_MAX_WORKERS = max(1, _get_env_int("MINERU_VISION_MAX_WORKERS", 4) or 4)
 
 # ===== 知识库与系统参数 =====
 

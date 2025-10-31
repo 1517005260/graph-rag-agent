@@ -3,13 +3,16 @@ MinerU 解析结果增强工具。
 
 负责为图片段落生成视觉描述，并在需要时写回段落结构。
 """
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from graphrag_agent.config.prompts import get_prompt_by_name
 from graphrag_agent.config.settings import (
     MINERU_VISION_SUMMARY_ENABLE,
     MINERU_VISION_PROMPT_NAME,
+    MINERU_VISION_MAX_WORKERS,
 )
 from graphrag_agent.agents.image_utils import load_image_as_base64
 from graphrag_agent.search.modal_renderer import ModalAssetProcessor
@@ -29,13 +32,15 @@ def augment_image_segments_with_vision(
     segments: List[Dict[str, Any]],
     method_dir: Optional[Path],
     prompt_text: Optional[str],
-) -> None:
-    """为 MinerU 的图片段落生成视觉摘要。"""
-    if not prompt_text:
-        return
+) -> Tuple[int, int, float]:
+    """为 MinerU 的图片段落生成视觉摘要，返回(总图片数, 新增描述数, 耗时)。"""
+    start_time = time.time()
 
     if not segments:
-        return
+        return 0, 0, 0.0
+
+    total_images = 0
+    newly_generated = 0
 
     base_dir: Optional[Path] = None
     if isinstance(method_dir, Path):
@@ -46,11 +51,13 @@ def augment_image_segments_with_vision(
         except Exception:  # pragma: no cover - 防御性
             base_dir = None
 
-    cache: Dict[str, Optional[str]] = {}
+    pending: Dict[Path, List[int]] = {}
 
-    for segment in segments:
+    for index, segment in enumerate(segments):
         if (segment.get("type") or "").lower() != "image":
             continue
+        total_images += 1
+
         if segment.get("vision_summary"):
             continue
 
@@ -58,18 +65,38 @@ def augment_image_segments_with_vision(
         if image_path is None:
             continue
 
-        cache_key = str(image_path)
-        if cache_key in cache:
-            summary = cache[cache_key]
-        else:
-            summary = _call_vision_model(image_path, prompt_text)
-            cache[cache_key] = summary
+        pending.setdefault(image_path, []).append(index)
 
-        if not summary:
-            continue
+    if not prompt_text or not pending:
+        # 即便没有生成新描述，也返回已有统计
+        elapsed = time.time() - start_time
+        return total_images, 0, elapsed
 
-        segment["vision_summary"] = summary
-        _merge_summary_into_segment(segment, summary)
+    max_workers = max(1, MINERU_VISION_MAX_WORKERS)
+
+    futures = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for path in pending:
+            futures[executor.submit(_call_vision_model, path, prompt_text)] = path
+
+        for future in as_completed(futures):
+            path = futures[future]
+            try:
+                summary = future.result()
+            except Exception:  # pragma: no cover - 防御性
+                summary = None
+
+            if not summary:
+                continue
+
+            for index in pending[path]:
+                segment = segments[index]
+                segment["vision_summary"] = summary
+                _merge_summary_into_segment(segment, summary)
+                newly_generated += 1
+
+    elapsed = time.time() - start_time
+    return total_images, newly_generated, elapsed
 
 
 def _resolve_image_path(

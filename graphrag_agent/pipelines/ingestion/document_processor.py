@@ -189,6 +189,9 @@ class DocumentProcessor:
             self._init_mineru()
 
         self._vision_prompt: Optional[str] = load_image_summary_prompt()
+        self.last_metrics: Dict[str, Any] = {}
+
+        self._vision_prompt: Optional[str] = load_image_summary_prompt()
 
     def _init_mineru(self) -> None:
         """初始化 MinerU 客户端"""
@@ -227,6 +230,10 @@ class DocumentProcessor:
             print(f"文件类型: {[Path(path).suffix for path in selected_files]}")
 
         results: List[Dict[str, Any]] = []
+        vision_total = 0
+        vision_enriched = 0
+        vision_time = 0.0
+        vision_generated = 0
         for relative_path in selected_files:
             extension = Path(relative_path).suffix.lower()
             full_path = Path(self.directory_path) / relative_path
@@ -258,6 +265,10 @@ class DocumentProcessor:
                             extension,
                             file_hash=file_hash,
                         )
+                    vision_total += result.get("image_segment_count", 0)
+                    vision_enriched += result.get("image_vision_summary_count", 0)
+                    vision_time += result.get("image_vision_time", 0.0)
+                    vision_generated += result.get("image_vision_generated_count", 0)
                 else:
                     result = self._process_file_legacy(relative_path, extension)
             except Exception as exc:
@@ -272,6 +283,14 @@ class DocumentProcessor:
                 print(f"处理文件 {relative_path} 失败: {exc}")
 
             results.append(result)
+
+        self.last_metrics = {
+            "vision_total": vision_total,
+            "vision_enriched": vision_enriched,
+            "vision_generated": vision_generated,
+            "vision_time": vision_time,
+            "file_count": len(selected_files),
+        }
 
         return results
 
@@ -497,7 +516,7 @@ class DocumentProcessor:
             fallback["mineru_result"] = asdict(parse_result)
             return fallback
 
-        rich_text, segments = self._build_modal_segments(parse_result)
+        rich_text, segments, vision_time, vision_generated = self._build_modal_segments(parse_result)
         rich_text = rich_text or ""
         result["content"] = rich_text
         result["content_length"] = len(rich_text)
@@ -519,6 +538,11 @@ class DocumentProcessor:
             chunk_texts,
             source="mineru",
         )
+
+        result["image_vision_time"] = vision_time
+        result["image_vision_generated_count"] = vision_generated
+        if vision_generated:
+            print(f"生成图片描述 {vision_generated} 条 -> {parse_result.filename}")
 
         result["mineru_result"] = asdict(parse_result)
         result["original_filename"] = parse_result.original_filename or parse_result.filename
@@ -575,9 +599,15 @@ class DocumentProcessor:
             except Exception:
                 method_dir = None
 
+        vision_time = 0.0
+        generated = 0
         if segments:
             if self._vision_prompt:
-                augment_image_segments_with_vision(segments, method_dir, self._vision_prompt)
+                _, generated, vision_time = augment_image_segments_with_vision(
+                    segments,
+                    method_dir,
+                    self._vision_prompt,
+                )
             rich_text = "\n\n".join(
                 (segment.get("text") or "").strip()
                 for segment in segments
@@ -587,6 +617,8 @@ class DocumentProcessor:
                 rich_text = payload.get("content") or ""
         else:
             rich_text = payload.get("content") or ""
+            vision_time = 0.0
+            generated = 0
 
         result: Dict[str, Any] = {
             "filepath": relative_path,
@@ -615,6 +647,10 @@ class DocumentProcessor:
             chunk_texts,
             source="mineru_cache",
         )
+        result["image_vision_time"] = vision_time
+        result["image_vision_generated_count"] = generated
+        if generated:
+            print(f"补全缓存图片描述 {generated} 条 -> {relative_path}")
 
         mineru_result = payload.get("mineru_result")
         if mineru_result:
@@ -637,8 +673,13 @@ class DocumentProcessor:
 
         return result
 
-    def _build_modal_segments(self, parse_result: ParseResult) -> Tuple[str, List[Dict[str, Any]]]:
-        """根据 MinerU 解析结果生成富文本段落"""
+    def _build_modal_segments(self, parse_result: ParseResult) -> Tuple[str, List[Dict[str, Any]], float, int]:
+        """根据 MinerU 解析结果生成富文本段落。
+
+        Returns:
+            Tuple[str, List[Dict[str, Any]], float, int]:
+                解析后的全文字符串、段落列表、视觉调用耗时、新生成的视觉描述数量。
+        """
         segments: List[Dict[str, Any]] = []
         method_dir = Path(parse_result.output_dir) if parse_result.output_dir else None
 
@@ -656,17 +697,37 @@ class DocumentProcessor:
         if not segments and parse_result.markdown_path and Path(parse_result.markdown_path).exists():
             try:
                 markdown_text = Path(parse_result.markdown_path).read_text(encoding="utf-8")
-                return markdown_text, [{"type": "markdown", "text": markdown_text}]
+                return markdown_text, [{"type": "markdown", "text": markdown_text}], 0.0, 0
             except Exception as exc:
                 print(f"读取 MinerU Markdown 失败 ({parse_result.markdown_path}): {exc}")
 
-        if segments and self._vision_prompt:
-            augment_image_segments_with_vision(segments, method_dir, self._vision_prompt)
+        vision_elapsed = 0.0
+        vision_generated = 0
+        if segments:
+            if self._vision_prompt:
+                missing_before = sum(
+                    1
+                    for segment in segments
+                    if (segment.get("type") or "").lower() == "image"
+                    and not segment.get("vision_summary")
+                )
+                _, generated, vision_elapsed = augment_image_segments_with_vision(
+                    segments,
+                    method_dir,
+                    self._vision_prompt,
+                )
+                vision_generated = min(generated, missing_before)
+            else:
+                vision_elapsed = 0.0
+                vision_generated = 0
+        else:
+            vision_elapsed = 0.0
+            vision_generated = 0
 
         rich_text = "\n\n".join(
             segment["text"].strip() for segment in segments if segment.get("text")
         )
-        return rich_text, segments
+        return rich_text, segments, vision_elapsed, vision_generated
 
     def _normalize_mineru_item(
         self,
@@ -780,7 +841,14 @@ class DocumentProcessor:
             for segment in prepared_segments
             if segment.get("image_relative_path")
         ]
-        result["image_segment_count"] = len(result["image_assets"])
+        result["image_segment_count"] = sum(
+            1 for segment in prepared_segments if segment.get("type") == "image"
+        )
+        result["image_vision_summary_count"] = sum(
+            1
+            for segment in prepared_segments
+            if segment.get("type") == "image" and segment.get("vision_summary")
+        )
         result["equation_segment_count"] = sum(
             1 for segment in prepared_segments if segment.get("type") == "equation"
         )

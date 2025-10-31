@@ -174,6 +174,19 @@ class KnowledgeGraphBuilder:
                         str(chunks_count)
                     )
                 self.console.print(table)
+
+                metrics = self.document_processor.last_metrics or {}
+                vision_total = metrics.get("vision_total", 0)
+                if vision_total:
+                    enriched = metrics.get("vision_enriched", 0)
+                    generated = metrics.get("vision_generated", 0)
+                    elapsed = metrics.get("vision_time", 0.0)
+                    vision_text = Text()
+                    vision_text.append(f"共解析图片: {vision_total}\n", style="cyan")
+                    vision_text.append(f"包含视觉描述: {enriched}\n", style="green")
+                    vision_text.append(f"新增描述: {generated}\n", style="green")
+                    vision_text.append(f"视觉模型耗时: {elapsed:.2f}s", style="magenta")
+                    self.console.print(Panel.fit(vision_text, title="图片解析概览", border_style="cyan"))
             
             self.performance_stats["文件处理"] = time.time() - process_start
             
