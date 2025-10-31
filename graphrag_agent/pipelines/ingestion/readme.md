@@ -15,7 +15,7 @@ graphrag_agent/
 
 ## 模块简介
 
-文档处理器(Document Processor)是一个用于读取、处理和分块各种格式文档的模块。该模块支持多种文件格式的读取，能够将文档内容按照语义进行智能分块，为后续的文本向量化和检索提供基础。
+文档处理器(Document Processor)负责读取、解析并分块各种格式的文档，同时在 MinerU 模式下提取多模态信息（图片、表格、公式等），为图谱构建与检索引擎提供结构化输入。
 
 ## 核心功能与实现思路
 
@@ -59,11 +59,7 @@ chunks = chunker.chunk_text(text_content)
 
 `DocumentProcessor` 类整合文件读取和文本分块功能，提供完整的文档处理流程：
 
-- 批量处理指定目录下的文件
-- 生成文件统计信息（类型分布、内容长度等）
-- 对每个文件进行分块处理
-- 收集处理结果和错误信息
-- 兼容 `legacy` 与 `mineru` 两种解析策略，并统一输出多模态结构化结果
+在传统 `legacy` 模式下，它只负责文本分块；在 `mineru` 模式下，则会调用 MinerU 服务进行多模态解析，并并行调用视觉模型生成图片描述，最终形成统一的结构化结果。
 
 ```python
 # 使用示例
@@ -78,8 +74,30 @@ results = processor.process_directory()  # 处理目录下所有支持的文件
 - `chunk_annotations`：每个分块对应的段落引用信息，含 `segment_ids`、`segment_types`、`char_start`/`char_end`
 - `image_assets`：所有抽取出的图片相对路径集合，可用于静态资源加载
 - `mineru_task_id`、`mineru_output_dir`、`content_list_path`：MinerU 解析任务的回溯信息
+- `image_vision_generated_count` / `image_vision_time`：本轮解析中新增的图片描述数量及耗时（秒），便于评估视觉模型开销
 
 即便运行在 `legacy` 模式，以上字段也会以降级策略补齐（例如直接将分块视作文本段落），保证后续图谱构建流程的兼容性。
+
+### 4. 并行视觉描述生成（mineru_enhancers）
+
+自 `mineru_enhancers.py` 起，图片描述生成由 `ThreadPoolExecutor` 并行执行，可通过 `.env` 中的 `MINERU_VISION_MAX_WORKERS` 控制并发度；是否启用及提示词分别由 `MINERU_VISION_SUMMARY_ENABLE` 和 `MINERU_VISION_PROMPT_NAME` 决定。
+
+```mermaid
+flowchart TD
+    A[DocumentProcessor] -->|mineru 模式| B[调用 MinerU API]
+    B --> C[content_list]
+    C --> D{是否图片?}
+    D -- 否 --> E[文本/表格等直接入 modal_segments]
+    D -- 是 --> F[mineru_enhancers\n并行视觉描述]
+    F --> G[vision_summary 写入 segment]
+    G --> H[modal_segments/annotations]
+    H --> I[GraphStructureBuilder\n落库 __ModalSegment__]
+    F --> J[返回统计]
+    J --> |生成数/耗时| A
+    J --> A
+```
+
+构建图谱时，控制台会输出 “生成图片描述 X 条”/“补全缓存图片描述 X 条” 等提示，以便观察视觉处理进度。
 
 ## 核心函数
 

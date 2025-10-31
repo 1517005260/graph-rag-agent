@@ -1,6 +1,6 @@
 import time
 import json
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 import pandas as pd
 from neo4j import Result
 
@@ -24,6 +24,15 @@ from graphrag_agent.search.retrieval_adapter import (
     results_from_relationships,
     results_to_payload,
 )
+from graphrag_agent.search.modal_renderer import ModalEnhancement
+from graphrag_agent.search.modal_enricher import ModalSummary
+
+
+def _compose_modal_context(summary: Optional[ModalSummary], enhancement: ModalEnhancement) -> str:
+    contexts = list(summary.contexts) if summary else []
+    if enhancement.vision_analysis:
+        contexts.append(f"[视觉解析]\n{enhancement.vision_analysis}".strip())
+    return "\n\n".join(contexts)
 
 
 class HybridSearchTool(BaseSearchTool):
@@ -578,6 +587,22 @@ class HybridSearchTool(BaseSearchTool):
             # 3. 生成最终答案
             llm_start = time.time()
             
+            modal_summary = self.modal_enricher.aggregate_modal_summary(modal_map=low_modal_map)
+            modal_context_text = "\n\n".join(modal_summary.contexts) if modal_summary else ""
+            combined_context = "\n\n".join(
+                part for part in [low_level_content, high_level_content, modal_context_text] if part
+            )
+            modal_enhancement = self.modal_asset_processor.prepare_enhancement(
+                question=query,
+                modal_summary=modal_summary,
+                context=combined_context,
+            )
+            if modal_enhancement.vision_analysis:
+                vision_block = f"[视觉解析]\n{modal_enhancement.vision_analysis}".strip()
+                low_level_content = (
+                    f"{low_level_content}\n\n{vision_block}" if low_level_content else vision_block
+                )
+
             # 调用LLM生成最终答案
             answer = self.query_chain.invoke({
                 "query": query,
@@ -585,19 +610,16 @@ class HybridSearchTool(BaseSearchTool):
                 "high_level": high_level_content,
                 "response_type": response_type
             })
-            modal_summary = self.modal_enricher.aggregate_modal_summary(modal_map=low_modal_map)
-            modal_context_text = "\n\n".join(modal_summary.contexts) if modal_summary else ""
-            modal_enhancement = self.modal_asset_processor.enhance_answer(
-                question=query,
-                answer=answer,
-                modal_summary=modal_summary,
-                context=modal_context_text,
-            )
             enhanced_answer = modal_enhancement.apply_to_answer(answer)
 
             self.performance_metrics["llm_time"] += time.time() - llm_start
             
             all_evidence = merge_retrieval_results(low_evidence, high_evidence)
+            modal_context_combined = _compose_modal_context(modal_summary, modal_enhancement)
+
+            modal_segments = modal_summary.segments if modal_summary else []
+            modal_asset_urls = modal_summary.asset_urls if modal_summary else []
+
             structured_result = {
                 "query": query,
                 "low_level_content": low_level_content,
@@ -605,9 +627,9 @@ class HybridSearchTool(BaseSearchTool):
                 "final_answer": enhanced_answer if enhanced_answer else "未找到相关信息",
                 "raw_final_answer": answer,
                 "retrieval_results": results_to_payload(all_evidence),
-                "modal_segments": modal_summary.segments,
-                "modal_asset_urls": modal_summary.asset_urls,
-                "modal_context": "\n\n".join(modal_summary.contexts),
+                "modal_segments": modal_segments,
+                "modal_asset_urls": modal_asset_urls,
+                "modal_context": modal_context_combined,
                 "image_markdown": modal_enhancement.markdown,
                 "vision_analysis": modal_enhancement.vision_analysis,
                 "modal_image_details": [

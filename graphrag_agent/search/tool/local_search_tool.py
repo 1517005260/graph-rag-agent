@@ -4,6 +4,7 @@ import json
 from langsmith import traceable
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.documents import Document
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain.tools.retriever import create_retriever_tool
 from langchain_core.output_parsers import StrOutputParser
@@ -179,28 +180,47 @@ class LocalSearchTool(BaseSearchTool):
         cached_answer = self.cache_manager.get(cache_key)
 
         try:
-            chain_output = self.rag_chain.invoke(
-                {
-                    "input": query,
-                    "response_type": "多个段落",
-                    "chat_history": self.chat_history,
-                }
+            retrieval_input = {
+                "input": query,
+                "chat_history": self.chat_history,
+            }
+            documents = self.history_aware_retriever.invoke(retrieval_input)
+            if documents is None:
+                documents = []
+            documents = list(documents)
+            documents = self.local_searcher.enrich_documents(documents)
+            modal_summary = self.local_searcher.aggregate_modal_summary(documents)
+            context_for_vision = "\n\n".join(
+                getattr(doc, "page_content", "") or "" for doc in documents
+            )
+            modal_enhancement = self.modal_asset_processor.prepare_enhancement(
+                question=query,
+                modal_summary=modal_summary,
+                context=context_for_vision,
             )
 
-            answer = chain_output.get("answer") or "抱歉，我无法回答这个问题。"
-            documents = chain_output.get("context") or []
-            modal_summary = self.local_searcher.aggregate_modal_summary(documents)
-            modal_context_text = "\n\n".join(modal_summary.contexts) if modal_summary else ""
+            llm_documents = list(documents)
+            if modal_enhancement.vision_analysis:
+                llm_documents.append(
+                    Document(
+                        page_content=f"[视觉解析]\n{modal_enhancement.vision_analysis}",
+                        metadata={"source": "vision_analysis"},
+                    )
+                )
+
+            answer = self.question_answer_chain.invoke(
+                {
+                    "input_documents": llm_documents,
+                    "chat_history": self.chat_history,
+                    "input": query,
+                    "response_type": "多个段落",
+                }
+            )
+            enhanced_answer = modal_enhancement.apply_to_answer(answer)
+
             retrieval_results = results_to_payload(
                 results_from_documents(documents, source="local_search")
             )
-            modal_enhancement = self.modal_asset_processor.enhance_answer(
-                question=query,
-                answer=answer,
-                modal_summary=modal_summary,
-                context=modal_context_text,
-            )
-            enhanced_answer = modal_enhancement.apply_to_answer(answer)
 
             structured_result = {
                 "query": query,

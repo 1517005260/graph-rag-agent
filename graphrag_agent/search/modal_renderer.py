@@ -65,6 +65,15 @@ class ModalEnhancement:
             "image_details": [detail.to_dict() for detail in self.image_details],
         }
 
+    def inject_into_context(self, context: str) -> str:
+        """将视觉解析注入检索上下文。"""
+        if not self.vision_analysis:
+            return context
+        vision_block = f"[视觉解析]\n{self.vision_analysis.strip()}"
+        if context and context.strip():
+            return f"{context.rstrip()}\n\n{vision_block}"
+        return vision_block
+
     def apply_to_answer(self, answer: str) -> str:
         """将多模态Markdown附加到原始答案后。"""
         if not self.markdown:
@@ -225,7 +234,21 @@ class ModalAssetProcessor:
         context: Optional[str] = None,
     ) -> ModalEnhancement:
         """根据多模态摘要生成Markdown与结构化描述。"""
+        enhancement = self.prepare_enhancement(
+            question=question,
+            modal_summary=modal_summary,
+            context=context or answer or "",
+        )
+        return enhancement
 
+    def prepare_enhancement(
+        self,
+        *,
+        question: str,
+        modal_summary: Optional[ModalSummary],
+        context: Optional[str] = None,
+    ) -> ModalEnhancement:
+        """预生成多模态增强内容，供回答前注入上下文。"""
         if modal_summary is None or not modal_summary.segments:
             return ModalEnhancement()
 
@@ -234,31 +257,30 @@ class ModalAssetProcessor:
             return ModalEnhancement()
 
         details = self._build_details(image_segments)
-        image_urls = [detail.url for detail in details if detail.url]
+        missing_summary = [detail for detail in details if not detail.vision_summary]
 
-        missing_summary = any(not detail.vision_summary for detail in details)
-        vision_analysis: Optional[str] = None
+        # 若已有描述，汇总为初始分析文本
+        collected = [
+            detail.vision_summary.strip()
+            for detail in details
+            if isinstance(detail.vision_summary, str) and detail.vision_summary.strip()
+        ]
+        vision_analysis: Optional[str] = "\n".join(dict.fromkeys(collected)) if collected else None
 
         if missing_summary:
+            image_urls = [detail.url for detail in missing_summary if detail.url]
             base64_images = self._load_images_for_vision(image_urls)
-            vision_analysis = self._invoke_vision_model(
+            analysis = self._invoke_vision_model(
                 question=question,
-                context=context or answer or "",
+                context=context or "",
                 base64_images=base64_images,
             )
-
-            if vision_analysis:
+            if analysis:
+                analysis = analysis.strip()
+                vision_analysis = analysis
                 for detail in details:
-                    detail.vision_summary = vision_analysis
-        else:
-            if details:
-                collected = [
-                    detail.vision_summary.strip()
-                    for detail in details
-                    if isinstance(detail.vision_summary, str)
-                ]
-                if collected:
-                    vision_analysis = "\n".join(dict.fromkeys(collected))
+                    if not detail.vision_summary:
+                        detail.vision_summary = analysis
 
         markdown = self._compose_markdown(details, vision_analysis)
         return ModalEnhancement(

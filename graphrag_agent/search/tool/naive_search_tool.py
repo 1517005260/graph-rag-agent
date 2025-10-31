@@ -168,6 +168,13 @@ class NaiveSearchTool(BaseSearchTool):
             
             context = "\n\n---\n\n".join(chunks_content)
             
+            modal_enhancement = self.modal_asset_processor.prepare_enhancement(
+                question=query,
+                modal_summary=modal_summary,
+                context=context,
+            )
+            context = modal_enhancement.inject_into_context(context)
+
             # 生成回答
             llm_start = time.time()
             
@@ -176,13 +183,6 @@ class NaiveSearchTool(BaseSearchTool):
                 "context": context,
                 "response_type": response_type
             })
-            modal_context_text = "\n\n".join(modal_summary.contexts)
-            modal_enhancement = self.modal_asset_processor.enhance_answer(
-                question=query,
-                answer=answer,
-                modal_summary=modal_summary,
-                context=modal_context_text,
-            )
             enhanced_answer = modal_enhancement.apply_to_answer(answer)
             
             llm_time = time.time() - llm_start

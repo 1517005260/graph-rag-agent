@@ -414,18 +414,28 @@ class GlobalSearchTool(BaseSearchTool):
                 }
 
             overall_modal_summary: ModalSummary = self._attach_modal_to_communities(community_data)
+            modal_context_text = "\n\n".join(overall_modal_summary.contexts) if overall_modal_summary else ""
+            modal_enhancement = self.modal_asset_processor.prepare_enhancement(
+                question=query,
+                modal_summary=overall_modal_summary,
+                context=modal_context_text,
+            )
+
             intermediate_results = self._process_communities(query, community_data)
+            if modal_enhancement.vision_analysis:
+                intermediate_results.append(f"[视觉解析]\n{modal_enhancement.vision_analysis}")
+
             final_answer = self._reduce_results(query, intermediate_results) if intermediate_results else ""
             retrieval_payload = self._community_results_to_retrieval(community_data)
             modal_segments = overall_modal_summary.segments if overall_modal_summary else []
             modal_asset_urls = overall_modal_summary.asset_urls if overall_modal_summary else []
-            modal_context_text = "\n\n".join(overall_modal_summary.contexts) if overall_modal_summary else ""
-            modal_enhancement = self.modal_asset_processor.enhance_answer(
-                question=query,
-                answer=final_answer or "",
-                modal_summary=overall_modal_summary,
-                context=modal_context_text,
-            )
+            if modal_enhancement.vision_analysis:
+                if modal_context_text:
+                    modal_context_text = (
+                        f"{modal_context_text}\n\n[视觉解析]\n{modal_enhancement.vision_analysis}"
+                    )
+                else:
+                    modal_context_text = f"[视觉解析]\n{modal_enhancement.vision_analysis}"
             enhanced_answer = modal_enhancement.apply_to_answer(final_answer or "")
 
             structured_result = {
