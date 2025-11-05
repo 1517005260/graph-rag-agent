@@ -67,6 +67,8 @@ pywin32>=302
 textract==1.6.3  # Windows 无需安装
 ```
 
+如果遇到报错：`OSError: [WinError 1114] 动态链接库(DLL)初始化例程失败。 Error loading "D:\anaconda\envs\graphrag\lib\site-packages\torch\lib\c10.dll" or one of its dependencies.` 是因为下载了torch2.9.0版本，遇到此问题请手动降级torch，比如`pip install torch==2.8.0`即可。
+
 ## 环境变量配置 (.env)
 
 ### 配置说明
