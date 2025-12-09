@@ -26,8 +26,8 @@ from graphrag_agent.config.settings import (
 from graphrag_agent.config.neo4jdb import get_db_manager
 from graphrag_agent.pipelines.ingestion.document_processor import DocumentProcessor
 from graphrag_agent.graph import GraphStructureBuilder
-from graphrag_agent.graph import EntityRelationExtractor
 from graphrag_agent.graph import GraphWriter
+from graphrag_agent.graph.extraction.extractor_factory import create_entity_extractor
 
 import shutup
 shutup.please()
@@ -99,12 +99,13 @@ class KnowledgeGraphBuilder:
             progress.advance(task)
             
             self.struct_builder = GraphStructureBuilder(batch_size=BATCH_SIZE)
-            self.entity_extractor = EntityRelationExtractor(
-                self.llm,
-                system_template_build_graph,
-                human_template_build_graph,
-                entity_types,
-                relationship_types,
+            # 使用工厂函数创建实体提取器，自动支持动态配置
+            self.entity_extractor = create_entity_extractor(
+                llm=self.llm,
+                system_template=system_template_build_graph,
+                human_template=human_template_build_graph,
+                entity_types=entity_types,
+                relationship_types=relationship_types,
                 max_workers=MAX_WORKERS,
                 batch_size=5  # LLM批处理大小保持小一些以确保质量
             )

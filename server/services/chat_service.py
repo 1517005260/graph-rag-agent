@@ -189,9 +189,22 @@ async def process_chat(message: str, session_id: str, debug: bool = False, agent
                     )
                 return {"answer": answer}
     except Exception as e:
-        print(f"处理聊天请求时出错: {str(e)}")
+        error_msg = str(e)
+        print(f"处理聊天请求时出错: {error_msg}")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+
+        # 检查是否是向量索引不存在的错误
+        if "vector index" in error_msg.lower() and "does not exist" in error_msg.lower():
+            friendly_msg = (
+                "知识图谱尚未构建，请先完成以下步骤：\n"
+                "1. 进入「📚 文档管理」上传文档\n"
+                "2. 进入「🏗️ 构建管理」点击「全量构建」\n"
+                "3. 等待构建完成后再进行查询\n\n"
+                "注意：首次构建可能需要几分钟时间，具体取决于文档数量。"
+            )
+            raise HTTPException(status_code=400, detail=friendly_msg)
+
+        raise HTTPException(status_code=500, detail=error_msg)
     finally:
         # 释放锁
         chat_manager.release_lock(lock_key)
@@ -371,9 +384,22 @@ async def process_chat_stream(
             yield json.dumps({"status": "done"})
             
     except Exception as e:
-        print(f"处理聊天请求时出错: {str(e)}")
+        error_msg = str(e)
+        print(f"处理聊天请求时出错: {error_msg}")
         print(traceback.format_exc())
-        yield json.dumps({"status": "error", "message": str(e)})
+
+        # 检查是否是向量索引不存在的错误
+        if "vector index" in error_msg.lower() and "does not exist" in error_msg.lower():
+            friendly_msg = (
+                "知识图谱尚未构建，请先完成以下步骤：\n"
+                "1. 进入「📚 文档管理」上传文档\n"
+                "2. 进入「🏗️ 构建管理」点击「全量构建」\n"
+                "3. 等待构建完成后再进行查询\n\n"
+                "注意：首次构建可能需要几分钟时间，具体取决于文档数量。"
+            )
+            yield json.dumps({"status": "error", "message": friendly_msg})
+        else:
+            yield json.dumps({"status": "error", "message": error_msg})
     finally:
         # 释放锁
         chat_manager.release_lock(lock_key)

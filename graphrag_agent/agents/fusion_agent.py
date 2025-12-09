@@ -69,6 +69,10 @@ class FusionGraphRAGAgent:
         key = query.strip()
         return self._global_cache.get(key) or self._session_cache.get(thread_id, {}).get(key)
 
+    def check_fast_cache(self, query: str, thread_id: str = "default") -> Optional[str]:
+        """快速缓存检查方法，用于高性能路径（与 BaseAgent 接口兼容）"""
+        return self._read_cache(query, thread_id)
+
     def _write_cache(self, query: str, thread_id: str, answer: str) -> None:
         key = query.strip()
         self._global_cache[key] = answer

@@ -1,0 +1,50 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info
+dist
+build
+.venv
+venv
+env
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# 缓存和日志
+cache/
+*.log
+.DS_Store
+
+# 环境变量（会单独挂载）
+.env
+.env.local
+.env.backup*
+
+# 测试
+.pytest_cache
+.coverage
+htmlcov
+
+# 文档
+*.md
+docs/
+
+# Neo4j 数据（会用 volume）
+neo4j_data/
+neo4j_logs/
+
+# 文件注册表（会单独挂载）
+file_registry.json

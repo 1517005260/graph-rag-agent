@@ -141,7 +141,15 @@ class BaseAgent(ABC):
         if "messages" in result and result["messages"]:
             message = result["messages"][0]
             content = message.content if hasattr(message, "content") else str(message)
-            
+
+            # 确保 content 是字符串类型
+            if isinstance(content, dict):
+                # 如果是字典，尝试提取答案字段
+                content = content.get('answer', str(content))
+            elif not isinstance(content, str):
+                # 如果不是字符串也不是字典，转换为字符串
+                content = str(content)
+
             # 按句子或段落分块，更自然
             import re
             chunks = re.split(r'([.!?。！？]\s*)', content)
@@ -534,20 +542,28 @@ class BaseAgent(ABC):
         # 首先尝试全局缓存（跨会话缓存）
         global_result = self.global_cache_manager.get(safe_query)
         if global_result:
+            # 确保结果是字符串类型
+            if isinstance(global_result, dict):
+                # 如果是字典，尝试提取答案字段
+                global_result = global_result.get('answer', str(global_result))
+            elif not isinstance(global_result, str):
+                # 如果不是字符串也不是字典，转换为字符串
+                global_result = str(global_result)
+
             # 对于缓存响应，按自然语言单位分块返回
             import re
             chunks = re.split(r'([.!?。！？]\s*)', global_result)
             buffer = ""
-            
+
             for i in range(0, len(chunks)):
                 buffer += chunks[i]
-                
+
                 # 当缓冲区包含完整句子或达到合理大小时输出
                 if (i % 2 == 1) or len(buffer) >= self.stream_flush_threshold:
                     yield buffer
                     buffer = ""
                     await asyncio.sleep(0.01)
-            
+
             # 输出任何剩余内容
             if buffer:
                 yield buffer
@@ -556,24 +572,32 @@ class BaseAgent(ABC):
         # 首先尝试快速路径 - 跳过验证的高质量缓存
         fast_result = self.check_fast_cache(safe_query, thread_id)
         if fast_result:
+            # 确保结果是字符串类型
+            if isinstance(fast_result, dict):
+                # 如果是字典，尝试提取答案字段
+                fast_result = fast_result.get('answer', str(fast_result))
+            elif not isinstance(fast_result, str):
+                # 如果不是字符串也不是字典，转换为字符串
+                fast_result = str(fast_result)
+
             # 对于缓存响应，按自然语言单位分块返回
             import re
             chunks = re.split(r'([.!?。！？]\s*)', fast_result)
             buffer = ""
-            
+
             for i in range(0, len(chunks)):
                 buffer += chunks[i]
-                
+
                 # 当缓冲区包含完整句子或达到合理大小时输出
                 if (i % 2 == 1) or len(buffer) >= self.stream_flush_threshold:
                     yield buffer
                     buffer = ""
                     await asyncio.sleep(0.01)
-            
+
             # 输出任何剩余内容
             if buffer:
                 yield buffer
-                
+
             # 将命中的内容同步到全局缓存
             self.global_cache_manager.set(safe_query, fast_result)
             return
@@ -582,26 +606,34 @@ class BaseAgent(ABC):
         cache_start = time.time()
         cached_response = self.cache_manager.get(safe_query, thread_id=thread_id)
         cache_time = time.time() - cache_start
-        
+
         if cached_response:
+            # 确保结果是字符串类型
+            if isinstance(cached_response, dict):
+                # 如果是字典，尝试提取答案字段
+                cached_response = cached_response.get('answer', str(cached_response))
+            elif not isinstance(cached_response, str):
+                # 如果不是字符串也不是字典，转换为字符串
+                cached_response = str(cached_response)
+
             # 同样按自然语言单位分块
             import re
             chunks = re.split(r'([.!?。！？]\s*)', cached_response)
             buffer = ""
-            
+
             for i in range(0, len(chunks)):
                 buffer += chunks[i]
-                
+
                 # 当缓冲区包含完整句子或达到合理大小时输出
                 if (i % 2 == 1) or len(buffer) >= self.stream_flush_threshold:
                     yield buffer
                     buffer = ""
                     await asyncio.sleep(0.01)
-            
+
             # 输出任何剩余内容
             if buffer:
                 yield buffer
-                
+
             # 将命中的内容同步到全局缓存
             self.global_cache_manager.set(safe_query, cached_response)
             return

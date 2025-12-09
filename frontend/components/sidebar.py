@@ -90,14 +90,17 @@ def display_sidebar():
         # 示例问题部分
         st.header("示例问题")
         example_questions = examples
-        
-        for question in example_questions:
-            st.markdown(f"""
-            <div style="background-color: #f7f7f7; padding: 8px; 
-                 border-radius: 4px; margin: 5px 0; font-size: 14px; cursor: pointer;">
-                {question}
-            </div>
-            """, unsafe_allow_html=True)
+
+        for idx, question in enumerate(example_questions):
+            if st.button(
+                question,
+                key=f"example_btn_{idx}",
+                use_container_width=True,
+                help="点击填入此问题"
+            ):
+                # 将示例问题设置到session state中，供主页面使用
+                st.session_state.example_question = question
+                st.rerun()
         
         st.markdown("---")
         

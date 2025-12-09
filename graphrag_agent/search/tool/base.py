@@ -110,11 +110,11 @@ class BaseSearchTool(ABC):
     def vector_search(self, query: str, limit: int = None) -> List[str]:
         """
         基于向量相似度的搜索方法
-        
+
         参数:
             query: 搜索查询
             limit: 最大返回结果数
-            
+
         返回:
             List[str]: 匹配实体ID列表
         """
@@ -122,7 +122,7 @@ class BaseSearchTool(ABC):
             limit = limit or self.default_vector_limit
             # 生成查询的嵌入向量
             query_embedding = self.embeddings.embed_query(query)
-            
+
             # 构建Neo4j向量搜索查询
             cypher = """
             CALL db.index.vector.queryNodes('vector', $limit, $embedding)
@@ -130,21 +130,30 @@ class BaseSearchTool(ABC):
             RETURN node.id AS id, score
             ORDER BY score DESC
             """
-            
+
             # 执行搜索
             results = self.db_query(cypher, {
                 "embedding": query_embedding,
                 "limit": limit
             })
-            
+
             # 提取实体ID
             if not results.empty:
                 return results['id'].tolist()
             else:
                 return []
-                
+
         except Exception as e:
-            print(f"向量搜索失败: {e}")
+            error_msg = str(e)
+            if "vector index" in error_msg.lower() or "does not exist" in error_msg.lower():
+                print(f"⚠️ 向量索引尚未创建。请先构建知识图谱：")
+                print("   1. 进入「📚 文档管理」上传文档")
+                print("   2. 进入「🏗️ 构建管理」点击「全量构建」")
+                print("   3. 等待构建完成后再进行查询")
+                print(f"\n正在使用文本搜索作为替代方案...")
+            else:
+                print(f"向量搜索失败: {e}")
+
             # 如果向量搜索失败，尝试使用文本搜索作为备用
             return self.text_search(query, limit)
     

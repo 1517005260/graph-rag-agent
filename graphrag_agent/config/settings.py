@@ -215,25 +215,35 @@ NEO4J_CONFIG = {
 
 # ===== LLM 与嵌入模型配置 =====
 
+# 通用配置（兼容旧版）
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
-OPENAI_EMBEDDINGS_MODEL = os.getenv("OPENAI_EMBEDDINGS_MODEL") or None
+
+# LLM 专用配置（如果不设置则使用通用配置）
+OPENAI_LLM_API_KEY = os.getenv("OPENAI_LLM_API_KEY") or OPENAI_API_KEY
+OPENAI_LLM_BASE_URL = os.getenv("OPENAI_LLM_BASE_URL") or OPENAI_BASE_URL
 OPENAI_LLM_MODEL = os.getenv("OPENAI_LLM_MODEL") or None
+
+# 嵌入模型专用配置（如果不设置则使用通用配置）
+OPENAI_EMBEDDING_API_KEY = os.getenv("OPENAI_EMBEDDING_API_KEY") or OPENAI_API_KEY
+OPENAI_EMBEDDING_BASE_URL = os.getenv("OPENAI_EMBEDDING_BASE_URL") or OPENAI_BASE_URL
+OPENAI_EMBEDDINGS_MODEL = os.getenv("OPENAI_EMBEDDINGS_MODEL") or None
+
 LLM_TEMPERATURE = _get_env_float("TEMPERATURE", None)
 LLM_MAX_TOKENS = _get_env_int("MAX_TOKENS", None)
 
 OPENAI_EMBEDDING_CONFIG = {
     "model": OPENAI_EMBEDDINGS_MODEL,
-    "api_key": OPENAI_API_KEY,
-    "base_url": OPENAI_BASE_URL,
+    "api_key": OPENAI_EMBEDDING_API_KEY,
+    "base_url": OPENAI_EMBEDDING_BASE_URL,
 }
 
 OPENAI_LLM_CONFIG = {
     "model": OPENAI_LLM_MODEL,
     "temperature": LLM_TEMPERATURE,
     "max_tokens": LLM_MAX_TOKENS,
-    "api_key": OPENAI_API_KEY,
-    "base_url": OPENAI_BASE_URL,
+    "api_key": OPENAI_LLM_API_KEY,
+    "base_url": OPENAI_LLM_BASE_URL,
 }
 
 # ===== 相似实体检测参数 =====
