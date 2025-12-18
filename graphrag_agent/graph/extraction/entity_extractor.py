@@ -1,8 +1,37 @@
-import time
+"""
+实体关系提取器（最终合并版）
+= production 抽取质量 + Schema-aware（GraphConfig/Domain 路由）=
+
+保留/增强：
+- JSON 输出解析（safe_json_loads）
+- 实体三板斧：normalize + type 白名单 + frequency >= 2 + similarity 去重
+- 关系白名单 + source/target 存在校验 + 去重
+- 兼容旧 GraphWriter 的输出协议（_build_compatible_result）
+- 并发 + cache + retry
+
+新增：
+- 若 extractor_factory 走"动态配置模式"，会在 extractor 上挂：
+  - extractor.is_dynamic = True
+  - extractor.prompt_builder = DynamicPromptBuilder(config)
+- 本文件会优先使用 prompt_builder.config 做 Domain routing
+- 每个文件选定 domain 后：
+  - entity_types / relationship_types 会收敛到该 domain schema
+  - 抽取/后处理都严格使用该 domain 白名单
+
+注意：
+- 如果没有动态配置（传统模式），则退化为使用传入的 entity_types / relationship_types
+"""
+
 import os
+import time
 import pickle
+import json
+import re
 import concurrent.futures
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
+from collections import Counter
+from difflib import SequenceMatcher
+
 from langchain.prompts import (
     ChatPromptTemplate,
     HumanMessagePromptTemplate,
@@ -13,462 +42,507 @@ from langchain.prompts import (
 from graphrag_agent.graph.core import retry, generate_hash
 from graphrag_agent.config.settings import MAX_WORKERS as DEFAULT_MAX_WORKERS, BATCH_SIZE as DEFAULT_BATCH_SIZE
 
+
+# =========================
+# 生产级默认约束（传统模式兜底）
+# =========================
+
+DEFAULT_ALLOWED_ENTITY_TYPES = {
+    "POLICY",       # 制度、政策、办法、条例
+    "PROCESS",      # 流程、步骤、阶段
+    "CONDITION",    # 条件、资格、标准
+    "ORGANIZATION", # 组织、机构、部门
+    "DOCUMENT"      # 正式文件名称
+}
+
+DEFAULT_ALLOWED_RELATION_TYPES = {
+    "HAS_CONDITION",
+    "HAS_STEP",
+    "ISSUED_BY",
+    "APPLIES_TO",
+    "PART_OF",
+    "REQUIRES"
+}
+
+DEFAULT_MIN_ENTITY_FREQUENCY = 2
+DEFAULT_NAME_SIMILARITY_THRESHOLD = 0.85
+
+
+# =========================
+# 工具函数（生产级）
+# =========================
+
+def normalize_entity_name(name: str) -> str:
+    if not name:
+        return ""
+    return (
+        name.strip()
+        .replace(" ", "")
+        .replace("（", "(")
+        .replace("）", ")")
+        .replace("【", "[")
+        .replace("】", "]")
+    )
+
+def is_similar(a: str, b: str, threshold: float) -> bool:
+    return SequenceMatcher(None, a, b).ratio() >= threshold
+
+def safe_json_loads(text: str) -> Dict[str, Any]:
+    """
+    安全 JSON 解析：兼容 LLM 输出多余文本/数组包裹/解析失败回空结构
+    """
+    if not text:
+        return {"entities": [], "relations": []}
+
+    try:
+        obj = json.loads(text)
+        # 有些模型会输出 list，取第一个 dict
+        if isinstance(obj, list) and obj:
+            if isinstance(obj[0], dict):
+                return obj[0]
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
+
+    # 提取 {...}
+    match = re.search(r"\{[\s\S]*\}", text)
+    if match:
+        try:
+            return json.loads(match.group())
+        except Exception:
+            pass
+
+    # 提取 [...]
+    match = re.search(r"\[[\s\S]*\]", text)
+    if match:
+        try:
+            arr = json.loads(match.group())
+            if isinstance(arr, list) and arr and isinstance(arr[0], dict):
+                return arr[0]
+        except Exception:
+            pass
+
+    print(f"⚠️ JSON 解析失败，原始文本片段：{text[:200]}...")
+    return {"entities": [], "relations": []}
+
+
+# =========================
+# 后处理核心逻辑（production + 可注入白名单）
+# =========================
+
+def post_process_entities(
+    raw_entities: List[Dict[str, Any]],
+    allowed_entity_types: set,
+    min_freq: int,
+    similarity_threshold: float
+) -> List[Dict[str, Any]]:
+    if not raw_entities:
+        return []
+
+    # normalize
+    for e in raw_entities:
+        if "name" in e:
+            e["name"] = normalize_entity_name(e.get("name", ""))
+
+    # type filter
+    entities = [
+        e for e in raw_entities
+        if e.get("type") in allowed_entity_types and e.get("name")
+    ]
+
+    # frequency filter
+    freq = Counter(e["name"] for e in entities)
+    entities = [e for e in entities if freq[e["name"]] >= min_freq]
+
+    # similarity dedup
+    deduped = []
+    for e in entities:
+        if not any(is_similar(e["name"], u["name"], similarity_threshold) for u in deduped):
+            deduped.append(e)
+
+    return deduped
+
+
+def post_process_relations(
+    raw_relations: List[Dict[str, Any]],
+    entities: List[Dict[str, Any]],
+    allowed_relation_types: set,
+    similarity_threshold: float
+) -> List[Dict[str, Any]]:
+    if not raw_relations or not entities:
+        return []
+
+    entity_names = {normalize_entity_name(e["name"]) for e in entities}
+    cleaned = []
+    seen = set()
+
+    for r in raw_relations:
+        src = normalize_entity_name(r.get("source", ""))
+        tgt = normalize_entity_name(r.get("target", ""))
+        r_type = r.get("type")
+
+        if (
+            src in entity_names and
+            tgt in entity_names and
+            r_type in allowed_relation_types
+        ):
+            key = (src, tgt, r_type)
+            if key not in seen:
+                cleaned.append({
+                    "source": src,
+                    "target": tgt,
+                    "type": r_type
+                })
+                seen.add(key)
+
+    return cleaned
+
+
+# =========================
+# Domain routing（Schema-aware）
+# =========================
+
+DOMAIN_ROUTER_SYSTEM = """
+你是一个文档分域分类器。给你多个候选领域，每个领域有 trigger_condition（自然语言规则）。
+请判断该文档最符合哪个领域。只输出领域名 domain_name，不要解释。
+如果都不符合，输出 NONE。
+"""
+
+DOMAIN_ROUTER_HUMAN = """
+候选领域：
+{candidates}
+
+文档内容（可能很长，已截断）：
+{doc_preview}
+"""
+
+
 class EntityRelationExtractor:
     """
-    实体关系提取器，负责从文本中提取实体和关系。
-    使用LLM分析文本块，生成结构化的实体和关系数据。
+    最终合并版实体关系提取器
     """
-    
-    def __init__(self, llm, system_template, human_template, 
-             entity_types: List[str], relationship_types: List[str],
-             cache_dir="./cache/graph", max_workers=4, batch_size=5):
-        """
-        初始化实体关系提取器
-        
-        Args:
-            llm: 语言模型
-            system_template: 系统提示模板
-            human_template: 用户提示模板
-            entity_types: 实体类型列表
-            relationship_types: 关系类型列表
-            cache_dir: 缓存目录
-            max_workers: 并行工作线程数
-            batch_size: 批处理大小
-        """
+
+    def __init__(
+        self,
+        llm,
+        system_template: str,
+        human_template: str,
+        entity_types: List[str],
+        relationship_types: List[str],
+        cache_dir: str = "./cache/graph",
+        max_workers: int = 4,
+        batch_size: int = 5
+    ):
         self.llm = llm
-        self.entity_types = entity_types
-        self.relationship_types = relationship_types
+
+        # 传统模式传入的类型（作为 fallback）
+        self.entity_types = entity_types or []
+        self.relationship_types = relationship_types or []
+
+        # 动态模式会由 extractor_factory 赋值：
+        # - self.is_dynamic = True
+        # - self.prompt_builder = DynamicPromptBuilder(config)
+        self.is_dynamic = getattr(self, "is_dynamic", False)
+        self.prompt_builder = getattr(self, "prompt_builder", None)
+
         self.chat_history = []
-        
-        # 设置分隔符
+
+        # 旧协议分隔符（GraphWriter 兼容）
         self.tuple_delimiter = " : "
         self.record_delimiter = "\n"
         self.completion_delimiter = "\n\n"
-        
-        # 创建提示模板
+
+        # Prompt chain（抽取）
         system_message_prompt = SystemMessagePromptTemplate.from_template(system_template)
         human_message_prompt = HumanMessagePromptTemplate.from_template(human_template)
-        
+
         self.chat_prompt = ChatPromptTemplate.from_messages([
             system_message_prompt,
             MessagesPlaceholder("chat_history"),
             human_message_prompt
         ])
-        
-        # 创建处理链
         self.chain = self.chat_prompt | self.llm
-        
-        # 缓存设置
+
+        # Router chain（按文件挑 domain）
+        router_sys = SystemMessagePromptTemplate.from_template(DOMAIN_ROUTER_SYSTEM)
+        router_human = HumanMessagePromptTemplate.from_template(DOMAIN_ROUTER_HUMAN)
+        self.router_prompt = ChatPromptTemplate.from_messages([router_sys, router_human])
+        self.router_chain = self.router_prompt | self.llm
+
+        # cache
         self.cache_dir = cache_dir
         self.enable_cache = True
-        
-        # 确保缓存目录存在
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
-        
-        # 并行处理配置
+        os.makedirs(cache_dir, exist_ok=True)
+
+        # concurrency
         self.max_workers = max_workers or DEFAULT_MAX_WORKERS
         self.batch_size = batch_size or DEFAULT_BATCH_SIZE
-        
-        # 缓存统计
+
+        # cache stats
         self.cache_hits = 0
         self.cache_misses = 0
-        
+
+    # -------------------------
+    # cache helpers
+    # -------------------------
     def _generate_cache_key(self, text: str) -> str:
-        """
-        生成文本的缓存键
-        
-        Args:
-            text: 输入文本
-            
-        Returns:
-            str: 缓存键
-        """
         return generate_hash(text)
-    
+
     def _cache_path(self, cache_key: str) -> str:
-        """
-        获取缓存文件路径
-        
-        Args:
-            cache_key: 缓存键
-            
-        Returns:
-            str: 缓存文件路径
-        """
         return os.path.join(self.cache_dir, f"{cache_key}.pkl")
-    
-    def _save_to_cache(self, cache_key: str, result: str) -> None:
-        """
-        保存结果到缓存
-        
-        Args:
-            cache_key: 缓存键
-            result: 结果
-        """
+
+    def _save_to_cache(self, cache_key: str, result: Any) -> None:
         if not self.enable_cache:
             return
-            
-        cache_path = self._cache_path(cache_key)
         try:
-            with open(cache_path, 'wb') as f:
+            with open(self._cache_path(cache_key), "wb") as f:
                 pickle.dump(result, f)
         except Exception as e:
             print(f"缓存保存错误: {e}")
-    
-    def _load_from_cache(self, cache_key: str) -> Optional[str]:
-        """
-        从缓存加载结果
-        
-        Args:
-            cache_key: 缓存键
-            
-        Returns:
-            Optional[str]: 缓存的结果，如果不存在则返回None
-        """
+
+    def _load_from_cache(self, cache_key: str) -> Optional[Any]:
         if not self.enable_cache:
             return None
-            
-        cache_path = self._cache_path(cache_key)
-        if os.path.exists(cache_path):
+        p = self._cache_path(cache_key)
+        if os.path.exists(p):
             try:
-                with open(cache_path, 'rb') as f:
-                    result = pickle.load(f)
+                with open(p, "rb") as f:
                     self.cache_hits += 1
-                    return result
+                    return pickle.load(f)
             except Exception as e:
                 print(f"缓存加载错误: {e}")
-        
         self.cache_misses += 1
         return None
-        
-    def process_chunks(self, file_contents: List[Tuple], progress_callback=None) -> List[Tuple]:
-        """
-        并行处理所有文件的所有chunks
-        
-        Args:
-            file_contents: 文件内容列表
-            progress_callback: 进度回调函数
-            
-        Returns:
-            List[Tuple]: 处理结果
-        """
-        t0 = time.time()
-        chunk_index = 0
-        total_chunks = sum(len(file_content[2]) for file_content in file_contents)
-        
-        # 使用多线程分配策略
-        for i, file_content in enumerate(file_contents):
-            chunks = file_content[2]
-            
-            # 预检查缓存命中率
-            cache_keys = [self._generate_cache_key(''.join(chunk)) for chunk in chunks]
-            cached_results = {key: self._load_from_cache(key) for key in cache_keys}
-            non_cached_indices = [idx for idx, key in enumerate(cache_keys) if cached_results[key] is None]
-            
-            if len(non_cached_indices) > 0:
-                # 只为未缓存的chunks创建任务
-                with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                    # 创建任务字典
-                    future_to_chunk = {
-                        executor.submit(self._process_single_chunk, ''.join(chunks[idx])): idx 
-                        for idx in non_cached_indices
-                    }
-                    
-                    # 处理完成的任务
-                    for future in concurrent.futures.as_completed(future_to_chunk):
-                        chunk_idx = future_to_chunk[future]
-                        try:
-                            result = future.result()
-                            cached_results[cache_keys[chunk_idx]] = result
-                            
-                            # 更新进度
-                            if progress_callback:
-                                progress_callback(chunk_index)
-                            chunk_index += 1
-                            
-                        except Exception as exc:
-                            print(f'Chunk {chunk_idx} 处理异常: {exc}')
-                            # 重试逻辑
-                            retry_count = 0
-                            while retry_count < 3:
-                                try:
-                                    print(f'尝试重试 Chunk {chunk_idx}, 第 {retry_count+1} 次')
-                                    result = self._process_single_chunk(''.join(chunks[chunk_idx]))
-                                    cached_results[cache_keys[chunk_idx]] = result
-                                    break
-                                except Exception as retry_exc:
-                                    print(f'重试失败: {retry_exc}')
-                                    retry_count += 1
-                                    time.sleep(1)  # 短暂延迟
-                            
-                            if cached_results[cache_keys[chunk_idx]] is None:
-                                cached_results[cache_keys[chunk_idx]] = ""
-            
-            # 整理结果，保持原始顺序
-            ordered_results = [cached_results[key] for key in cache_keys]
-            file_content.append(ordered_results)
-            
-            # 输出缓存统计
-            cache_ratio = self.cache_hits / (self.cache_hits + self.cache_misses) * 100 if (self.cache_hits + self.cache_misses) > 0 else 0
-            print(f"文件 {i+1}/{len(file_contents)} 处理完成, 缓存命中率: {cache_ratio:.1f}%")
-        
-        process_time = time.time() - t0
-        print(f"所有chunks处理完成, 总耗时: {process_time:.2f}秒, 平均每chunk: {process_time/total_chunks:.2f}秒")
-        return file_contents
-    
-    def process_chunks_batch(self, file_contents: List[Tuple], progress_callback=None) -> List[Tuple]:
-        """
-        批量处理chunks，减少LLM调用次数
-        
-        Args:
-            file_contents: 文件内容列表
-            progress_callback: 进度回调函数
-            
-        Returns:
-            List[Tuple]: 处理结果
-        """
-        for file_content in file_contents:
-            chunks = file_content[2]
-            results = []
-            
-            # 智能动态批处理大小
-            chunk_lengths = [len(''.join(chunk)) for chunk in chunks]
-            avg_chunk_size = sum(chunk_lengths) / len(chunk_lengths) if chunk_lengths else 0
-            
-            # 根据平均chunk大小动态调整批处理大小
-            dynamic_batch_size = max(1, min(self.batch_size, int(10000 / (avg_chunk_size + 1))))
-            
-            # 按批次处理
-            for i in range(0, len(chunks), dynamic_batch_size):
-                batch_chunks = chunks[i:i+dynamic_batch_size]
-                
-                # 缓存检查
-                batch_keys = [self._generate_cache_key(''.join(chunk)) for chunk in batch_chunks]
-                cached_batch_results = [self._load_from_cache(key) for key in batch_keys]
-                
-                # 如果所有结果都已缓存，则跳过LLM调用
-                if None not in cached_batch_results:
-                    results.extend(cached_batch_results)
-                    if progress_callback:
-                        for j in range(len(batch_chunks)):
-                            progress_callback(i + j)
-                    continue
-                
-                # 准备批处理输入
-                batch_inputs = []
-                for chunk in batch_chunks:
-                    batch_inputs.append(''.join(chunk))
-                
-                # 使用分隔符合并多个文本块
-                batch_text = f"\n{'-'*50}\n".join(batch_inputs)
-                
-                try:
-                    # 使用原始提示模板处理批量输入
-                    batch_response = self.chain.invoke({
-                        "chat_history": self.chat_history,
-                        "entity_types": self.entity_types,
-                        "relationship_types": self.relationship_types,
-                        "tuple_delimiter": self.tuple_delimiter,
-                        "record_delimiter": self.record_delimiter,
-                        "completion_delimiter": self.completion_delimiter,
-                        "input_text": batch_text
-                    })
-                    
-                    # 解析批量响应
-                    batch_results = self._parse_batch_response(batch_response.content)
-                    
-                    # 处理结果数量不匹配的情况
-                    if len(batch_results) != len(batch_chunks):
-                        # 如果无法正确解析批处理响应，则单独处理每个chunk
-                        # print(f"批处理结果数量不匹配 (期望 {len(batch_chunks)}, 实际 {len(batch_results)}), 将单独处理每个chunk")
-                        batch_results = []
-                        for idx, chunk in enumerate(batch_chunks):
-                            # 检查缓存
-                            cached_result = cached_batch_results[idx]
-                            if cached_result is not None:
-                                batch_results.append(cached_result)
-                            else:
-                                individual_result = self._process_single_chunk(''.join(chunk))
-                                batch_results.append(individual_result)
-                    else:
-                        # 缓存批处理结果
-                        for idx, result in enumerate(batch_results):
-                            if cached_batch_results[idx] is None:  # 只缓存未命中的结果
-                                self._save_to_cache(batch_keys[idx], result)
-                    
-                    results.extend(batch_results)
-                except Exception as e:
-                    print(f"批处理错误，切换到单个处理: {e}")
-                    for idx, chunk in enumerate(batch_chunks):
-                        try:
-                            individual_result = self._process_single_chunk(''.join(chunk))
-                            results.append(individual_result)
-                        except Exception as e2:
-                            print(f"单个chunk处理失败: {e2}")
-                            results.append("")
-                
-                # 更新进度
-                if progress_callback:
-                    for j in range(len(batch_chunks)):
-                        progress_callback(i + j)
-            
-            file_content.append(results)
-        
-        return file_contents
 
-    def _parse_batch_response(self, batch_content: str) -> List[str]:
+    # -------------------------
+    # schema helpers
+    # -------------------------
+    def _get_graph_config(self):
         """
-        解析批量响应，将其分割为单独的结果
-        
-        Args:
-            batch_content: 批处理响应内容
-            
-        Returns:
-            List[str]: 分割后的结果列表
+        动态模式下，prompt_builder.config 就是 GraphConfig（你 extractor_factory 已经 load storage 并构建了它）
         """
-        # 使用分隔符分割响应
-        parts = batch_content.split(f"\n{'-'*50}\n")
-        return [part.strip() for part in parts]
-    
+        if self.prompt_builder is not None and hasattr(self.prompt_builder, "config"):
+            return self.prompt_builder.config
+        return None
+
+    def _route_domain_for_document(self, filename: str, content: str) -> Optional[str]:
+        """
+        使用 GraphConfig.domain_definitions 的 trigger_condition 做 domain routing
+        """
+        config = self._get_graph_config()
+        if config is None or not getattr(config, "domain_definitions", None):
+            return None
+
+        # cache（按文件+内容预览）
+        preview = (content or "")[:2000]
+        doc_key = self._generate_cache_key(f"domain::{filename}::{preview}")
+        cached = self._load_from_cache(doc_key)
+        if cached is not None:
+            # cached 可能是 "" 代表 NONE
+            return cached or None
+
+        candidates = []
+        for d in config.domain_definitions:
+            candidates.append(f"- {d.domain_name}: {d.trigger_condition}")
+
+        resp = self.router_chain.invoke({
+            "candidates": "\n".join(candidates),
+            "doc_preview": preview
+        })
+
+        domain = (resp.content or "").strip()
+        if not domain or domain.upper() == "NONE":
+            domain = None
+
+        self._save_to_cache(doc_key, domain or "")
+        return domain
+
+    def _schema_for_domain(self, domain_name: Optional[str]) -> Tuple[set, set]:
+        """
+        返回 domain 对应的实体/关系白名单
+        """
+        config = self._get_graph_config()
+        if config is None or not domain_name:
+            # fallback（传统）
+            return set(self.entity_types) or DEFAULT_ALLOWED_ENTITY_TYPES, set(self.relationship_types) or DEFAULT_ALLOWED_RELATION_TYPES
+
+        for d in config.domain_definitions:
+            if d.domain_name == domain_name:
+                ent = set(d.schema.entities or [])
+                rel = set(d.schema.relations or [])
+                # 如果 schema 为空，兜底用默认
+                if not ent:
+                    ent = DEFAULT_ALLOWED_ENTITY_TYPES
+                if not rel:
+                    rel = DEFAULT_ALLOWED_RELATION_TYPES
+                return ent, rel
+
+        return set(self.entity_types) or DEFAULT_ALLOWED_ENTITY_TYPES, set(self.relationship_types) or DEFAULT_ALLOWED_RELATION_TYPES
+
+    # -------------------------
+    # output builder（兼容 GraphWriter）
+    # -------------------------
+    def _build_compatible_result(self, entities: List[Dict[str, Any]], relations: List[Dict[str, Any]]) -> str:
+        """
+        兼容旧格式：
+        ("entity" : <name> : <type> : <desc>)
+        ("relationship" : <src> : <tgt> : <type> : <desc> : <strength>)
+        """
+        lines = []
+
+        for e in entities:
+            name = e.get("name", "")
+            e_type = e.get("type", "")
+            desc = e.get("description", name)
+            lines.append(f'("entity"{self.tuple_delimiter}{name}{self.tuple_delimiter}{e_type}{self.tuple_delimiter}{desc})')
+
+        for r in relations:
+            src = r.get("source", "")
+            tgt = r.get("target", "")
+            r_type = r.get("type", "")
+            desc = r.get("description", f"{src} {r_type} {tgt}")
+            strength = r.get("strength", 8)
+            lines.append(
+                f'("relationship"{self.tuple_delimiter}{src}{self.tuple_delimiter}{tgt}{self.tuple_delimiter}{r_type}'
+                f'{self.tuple_delimiter}{desc}{self.tuple_delimiter}{strength})'
+            )
+
+        return self.record_delimiter.join(lines) + self.completion_delimiter
+
+    # -------------------------
+    # chunk processing
+    # -------------------------
     @retry(times=3, exceptions=(Exception,), delay=1.0)
-    def _process_single_chunk(self, input_text: str) -> str:
+    def _process_single_chunk(
+        self,
+        input_text: str,
+        allowed_entity_types: set,
+        allowed_relation_types: set
+    ) -> str:
         """
-        处理单个文本块（带缓存）
-        
-        Args:
-            input_text: 输入文本
-            
-        Returns:
-            str: 处理结果
+        单 chunk 抽取：LLM -> JSON -> 后处理 -> 兼容输出
         """
-        # 生成缓存键
-        cache_key = self._generate_cache_key(input_text)
-        
-        # 尝试从缓存加载
-        cached_result = self._load_from_cache(cache_key)
-        if cached_result:
-            return cached_result
-        
-        # 未缓存，调用LLM处理
-        response = self.chain.invoke({
+        cache_key = self._generate_cache_key(
+            f"{sorted(list(allowed_entity_types))}|{sorted(list(allowed_relation_types))}|{input_text}"
+        )
+        cached = self._load_from_cache(cache_key)
+        if cached:
+            return cached
+
+        # 1) 调用 LLM（注意：system_template/human_template 可能会用到 entity_types/relationship_types 占位符）
+        resp = self.chain.invoke({
             "chat_history": self.chat_history,
-            "entity_types": self.entity_types,
-            "relationship_types": self.relationship_types,
+            "entity_types": list(allowed_entity_types),
+            "relationship_types": list(allowed_relation_types),
             "tuple_delimiter": self.tuple_delimiter,
             "record_delimiter": self.record_delimiter,
             "completion_delimiter": self.completion_delimiter,
             "input_text": input_text
         })
-        
-        result = response.content
-        
-        # 保存结果到缓存
+
+        raw = resp.content or ""
+        parsed = safe_json_loads(raw)
+
+        raw_entities = parsed.get("entities", []) or []
+        raw_relations = parsed.get("relations", []) or []
+
+        # 2) 后处理（白名单来自 domain schema）
+        entities = post_process_entities(
+            raw_entities,
+            allowed_entity_types=allowed_entity_types,
+            min_freq=DEFAULT_MIN_ENTITY_FREQUENCY,
+            similarity_threshold=DEFAULT_NAME_SIMILARITY_THRESHOLD
+        )
+
+        relations = post_process_relations(
+            raw_relations,
+            entities,
+            allowed_relation_types=allowed_relation_types,
+            similarity_threshold=DEFAULT_NAME_SIMILARITY_THRESHOLD
+        )
+
+        # 3) 兼容输出
+        result = self._build_compatible_result(entities, relations)
+
         self._save_to_cache(cache_key, result)
-        
         return result
-    
-    def stream_process_large_files(self, file_path: str, chunk_size: int = 5000, 
-                                   structure_builder=None, graph_writer=None) -> None:
+
+    def process_chunks(self, file_contents: List[Tuple], progress_callback=None) -> List[Tuple]:
         """
-        以流式方式处理大文件，避免一次性加载全部内容
-        
-        Args:
-            file_path: 文件路径
-            chunk_size: 块大小
-            structure_builder: 结构构建器
-            graph_writer: 图写入器
+        file_contents: [ [filename, content, chunks], ... ]
+        append: results list -> file_content[3]
         """
-        if not structure_builder or not graph_writer:
-            print("需要提供structure_builder和graph_writer才能进行流式处理")
-            return
-            
-        def text_chunks_iterator(file_path, chunk_size):
-            with open(file_path, 'r', encoding='utf-8') as f:
-                chunk = []
-                chars_count = 0
-                for line in f:
-                    chunk.append(line)
-                    chars_count += len(line)
-                    if chars_count >= chunk_size:
-                        yield chunk
-                        chunk = []
-                        chars_count = 0
-                if chunk:  # 不要忘记最后一个可能不满的chunk
-                    yield chunk
-        
-        # 处理文件的元数据
-        file_name = os.path.basename(file_path)
-        file_type = os.path.splitext(file_name)[1]
-        
-        # 创建文档节点
-        structure_builder.create_document(
-            type=file_type,
-            uri=file_path,
-            file_name=file_name,
-            domain="document"
-        )
-        
-        # 流式处理文件
-        chunks = []
-        for chunk in text_chunks_iterator(file_path, chunk_size):
-            chunks.append(chunk)
-        
-        # 创建chunk之间的关系
-        chunks_with_hash = structure_builder.create_relation_between_chunks(
-            file_name, chunks
-        )
-        
-        # 并行处理所有chunks
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # 创建任务
-            future_to_chunk = {}
-            for chunk_data in chunks_with_hash:
-                chunk_text = chunk_data['chunk_doc'].page_content
-                cache_key = self._generate_cache_key(chunk_text)
-                cached_result = self._load_from_cache(cache_key)
-                
-                if cached_result:
-                    # 如果缓存命中，直接处理结果
-                    try:
-                        graph_document = graph_writer.convert_to_graph_document(
-                            chunk_data['chunk_id'],
-                            chunk_data['chunk_doc'].page_content,
-                            cached_result
-                        )
-                        
-                        if len(graph_document.nodes) > 0 or len(graph_document.relationships) > 0:
-                            graph_writer.graph.add_graph_documents(
-                                [graph_document],
-                                baseEntityLabel=True,
-                                include_source=True
-                            )
-                    except Exception as e:
-                        print(f"处理缓存结果时出错: {e}")
-                else:
-                    # 如果缓存未命中，提交任务
-                    future = executor.submit(self._process_single_chunk, chunk_text)
-                    future_to_chunk[future] = chunk_data
-            
-            # 处理结果并写入图数据库
-            for future in concurrent.futures.as_completed(future_to_chunk):
-                chunk_data = future_to_chunk[future]
-                try:
-                    result = future.result()
-                    
-                    # 实时写入一个chunk的结果到图数据库
-                    graph_document = graph_writer.convert_to_graph_document(
-                        chunk_data['chunk_id'],
-                        chunk_data['chunk_doc'].page_content,
-                        result
-                    )
-                    
-                    if len(graph_document.nodes) > 0 or len(graph_document.relationships) > 0:
-                        graph_writer.graph.add_graph_documents(
-                            [graph_document],
-                            baseEntityLabel=True,
-                            include_source=True
-                        )
-                        
-                except Exception as exc:
-                    print(f"处理chunk {chunk_data['chunk_id']} 时发生错误: {exc}")
+        t0 = time.time()
+        chunk_index = 0
+        total_chunks = sum(len(fc[2]) for fc in file_contents)
+
+        # 文件级 domain routing & schema 准备
+        file_schema_map: Dict[str, Tuple[set, set]] = {}
+        for fc in file_contents:
+            filename, content = fc[0], fc[1]
+            domain = self._route_domain_for_document(filename, content or "")
+            ent_types, rel_types = self._schema_for_domain(domain)
+            file_schema_map[filename] = (ent_types, rel_types)
+
+        for i, fc in enumerate(file_contents):
+            filename = fc[0]
+            chunks = fc[2]
+            allowed_entity_types, allowed_relation_types = file_schema_map.get(
+                filename,
+                (set(self.entity_types) or DEFAULT_ALLOWED_ENTITY_TYPES, set(self.relationship_types) or DEFAULT_ALLOWED_RELATION_TYPES)
+            )
+
+            # 预检查缓存（按 chunk）
+            chunk_texts = [''.join(chunk) for chunk in chunks]
+            cache_keys = [
+                self._generate_cache_key(
+                    f"{sorted(list(allowed_entity_types))}|{sorted(list(allowed_relation_types))}|{txt}"
+                )
+                for txt in chunk_texts
+            ]
+            cached_results = {k: self._load_from_cache(k) for k in cache_keys}
+            non_cached_indices = [idx for idx, k in enumerate(cache_keys) if cached_results[k] is None]
+
+            if non_cached_indices:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    futures = {
+                        executor.submit(
+                            self._process_single_chunk,
+                            chunk_texts[idx],
+                            allowed_entity_types,
+                            allowed_relation_types
+                        ): idx
+                        for idx in non_cached_indices
+                    }
+
+                    for fut in concurrent.futures.as_completed(futures):
+                        idx = futures[fut]
+                        try:
+                            res = fut.result()
+                            cached_results[cache_keys[idx]] = res
+                            self._save_to_cache(cache_keys[idx], res)
+                        except Exception as e:
+                            print(f'Chunk {idx} 处理异常: {e}')
+                            cached_results[cache_keys[idx]] = "" + self.completion_delimiter
+
+                        if progress_callback:
+                            progress_callback(chunk_index)
+                        chunk_index += 1
+
+            ordered = [cached_results[k] for k in cache_keys]
+            fc.append(ordered)
+
+            cache_ratio = self.cache_hits / (self.cache_hits + self.cache_misses) * 100 if (self.cache_hits + self.cache_misses) else 0
+            print(f"文件 {i+1}/{len(file_contents)} 处理完成, domain-schema启用={self._get_graph_config() is not None}, 缓存命中率: {cache_ratio:.1f}%")
+
+        dt = time.time() - t0
+        print(f"所有chunks处理完成, 总耗时: {dt:.2f}秒, 平均每chunk: {dt/max(total_chunks,1):.2f}秒")
+        return file_contents
+
+    def process_chunks_batch(self, file_contents: List[Tuple], progress_callback=None) -> List[Tuple]:
+        """
+        为了稳定 & 保证 chunk 与结果对齐，batch 先退化为 process_chunks。
+        你 build_graph 在 chunk>100 时会走 batch，这样不会出现"空跑/结果错位"。
+        """
+        return self.process_chunks(file_contents, progress_callback)

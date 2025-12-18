@@ -5,24 +5,65 @@
 """
 
 system_template_build_graph = """
--目标- 
-给定相关的文本文档和实体类型列表，从文本中识别出这些类型的所有实体以及所识别实体之间的所有关系。 
--步骤- 
-1.识别所有实体。对于每个已识别的实体，提取以下信息： 
--entity_name：实体名称，大写 
--entity_type：以下类型之一：[{entity_types}]
--entity_description：对实体属性和活动的综合描述 
-将每个实体格式化为("entity"{tuple_delimiter}<entity_name>{tuple_delimiter}<entity_type>{tuple_delimiter}<entity_description>
-2.从步骤1中识别的实体中，识别彼此*明显相关*的所有实体配对(source_entity, target_entity)。 
-对于每对相关实体，提取以下信息： 
--source_entity：源实体的名称，如步骤1中所标识的 
--target_entity：目标实体的名称，如步骤1中所标识的
--relationship_type：以下类型之一：[{relationship_types}]，当不能归类为上述列表中前面的类型时，归类为最后的一类“其它”
--relationship_description：解释为什么你认为源实体和目标实体是相互关联的 
--relationship_strength：一个数字评分，表示源实体和目标实体之间关系的强度 
-将每个关系格式化为("relationship"{tuple_delimiter}<source_entity>{tuple_delimiter}<target_entity>{tuple_delimiter}<relationship_type>{tuple_delimiter}<relationship_description>{tuple_delimiter}<relationship_strength>) 
-3.实体和关系的所有属性用中文输出，步骤1和2中识别的所有实体和关系输出为一个列表。使用**{record_delimiter}**作为列表分隔符。 
-4.完成后，输出{completion_delimiter}
+你是一个"知识图谱构建专家"。
+
+请从给定文本中抽取【实体】和【关系】，但必须严格遵守以下规则：
+
+【实体抽取规则】（生产级验证 - 关键约束）
+
+1. ✅ 只抽取以下类型的实体：
+   - 具体制度 / 政策 / 项目名称（如"国家奖学金""勤工助学管理办法"）
+   - 明确的组织、机构、部门（如"学生处""奖助学金评审委员会"）
+   - 明确的流程、步骤（具有开始和结束，如"申请流程""评审流程"）
+   - 明确的条件、资格、标准（可被判断为"满足/不满足"，如"GPA≥3.5""无违纪记录"）
+   - 明确的实体类型：{entity_types}
+
+2. ❌ **不要**抽取以下内容为实体：
+   - 泛指概念（如"情况""相关内容""方面""问题"）
+   - 描述性短语（如"较为重要的流程""一般性规定"）
+   - 情绪、评价、背景性说明（如"很重要""需要注意"）
+   - 抽象概念（如"公平""效率""质量"）
+
+3. 🔥 **频率约束**（防止实体爆炸 - 最关键）：
+   - 同一个实体在文本中如果只出现 **1 次** → **跳过**（可能是噪音）
+   - 同一个实体在文本中出现 **≥2 次** → **抽取**（说明有重要性）
+   - 如果一个名词只出现一次，且不影响理解整体结构 → **不要抽取**
+
+4. 📝 **标准化规则**（防止重复实体）：
+   - 同一个实体在文本中如果多次出现：只保留一次
+   - 使用最完整、最标准的名称（如"国家奖学金"而不是"奖学金"）
+   - 去除空格、统一括号格式（"（"→"(" "）"→")"）
+
+【关系抽取规则】（生产级验证）
+
+1. ✅ 只能使用以下关系类型之一（从 {relationship_types} 中选择）：
+   - 如果不在列表中，归类为"其它"
+   - 不允许创造新的关系类型
+
+2. 🔥 **关系质量约束**：
+   - 关系必须能回答"为什么这个关系对理解制度/流程有用"
+   - 关系必须是实体之间的直接关联，而不是间接推理
+   - 避免冗余关系（如 A→B 和 B→A 表达同一含义）
+
+3. 📊 **关系强度评分**（1-10）：
+   - 9-10：核心关系（如"国家奖学金"→"评审委员会"）
+   - 7-8：重要关系（如"申请流程"→"材料提交"）
+   - 5-6：一般关系
+   - <5：弱关系（建议不抽取）
+
+【输出格式】
+
+实体格式：
+("entity"{tuple_delimiter}<ENTITY_NAME>{tuple_delimiter}<entity_type>{tuple_delimiter}<entity_description>)
+
+关系格式：
+("relationship"{tuple_delimiter}<SOURCE_ENTITY>{tuple_delimiter}<TARGET_ENTITY>{tuple_delimiter}<relationship_type>{tuple_delimiter}<relationship_description>{tuple_delimiter}<relationship_strength>)
+
+【重要提醒】
+- 实体和关系的所有属性用中文输出
+- 使用 **{record_delimiter}** 作为列表分隔符
+- 完成后输出 {completion_delimiter}
+- 不要解释，只输出结果
 
 ###################### 
 -示例- 

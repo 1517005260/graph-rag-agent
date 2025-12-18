@@ -1,10 +1,27 @@
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-from graphrag_agent.config.settings import examples as eg
-
 load_dotenv()
+
+# ===== 路径设置 =====
+# 直接定义，避免导入后端模块触发 Neo4j 连接
+
+FRONTEND_DIR = Path(__file__).resolve().parent.parent  # frontend 目录
+PROJECT_ROOT = FRONTEND_DIR.parent  # 项目根目录
+FILES_DIR = PROJECT_ROOT / "files"  # 文件存储目录
+
+# ===== 示例问题 =====
+# 直接定义示例问题，避免导入后端模块
+
+examples = [
+    "旷课多少学时会被退学？",
+    "如何申请国家奖学金？",
+    "学生违纪处分有哪些类型？",
+    "国家励志奖学金的申请条件是什么？",
+    "学生申诉的流程是怎样的？"
+]
 
 
 def _get_env_bool(key: str, default: bool) -> bool:
@@ -36,9 +53,6 @@ DEFAULT_SHOW_THINKING = _get_env_bool("FRONTEND_SHOW_THINKING", True)  # 是否�
 DEFAULT_USE_DEEPER_TOOL = _get_env_bool("FRONTEND_USE_DEEPER_TOOL", True)  # 深度研究工具默认开关
 DEFAULT_USE_STREAM = _get_env_bool("FRONTEND_USE_STREAM", True)  # 是否默认使用流式输出
 DEFAULT_CHAIN_EXPLORATION = _get_env_bool("FRONTEND_USE_CHAIN_EXPLORATION", True)  # 链式探索开关
-
-# 示例问题直接复用核心配置，保持前后端一致
-examples = eg
 
 # ===== 知识图谱展示参数 =====
 

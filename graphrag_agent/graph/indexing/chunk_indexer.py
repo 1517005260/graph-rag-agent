@@ -5,7 +5,13 @@ from langchain_community.vectorstores import Neo4jVector
 
 from graphrag_agent.models.get_models import get_embeddings_model
 from graphrag_agent.graph.core import BaseIndexer, connection_manager
-from graphrag_agent.config.settings import CHUNK_BATCH_SIZE, MAX_WORKERS as DEFAULT_MAX_WORKERS
+from graphrag_agent.config.settings import (
+    CHUNK_BATCH_SIZE,
+    MAX_WORKERS as DEFAULT_MAX_WORKERS,
+    CHUNK_VECTOR_INDEX,
+    EMBEDDING_DIM,
+    VECTOR_SIMILARITY_FUNCTION
+)
 
 class ChunkIndexManager(BaseIndexer):
     """
@@ -50,12 +56,46 @@ class ChunkIndexManager(BaseIndexer):
         """清除已存在的普通索引"""
         connection_manager.drop_index("chunk_embedding")
 
+    def create_vector_index(self, node_label: str = '__Chunk__', embedding_property: str = 'embedding') -> None:
+        """
+        显式创建 Neo4j Vector Index（工程级实践）
+
+        Args:
+            node_label: 节点标签
+            embedding_property: embedding属性名
+        """
+        query = f"""
+        CREATE VECTOR INDEX {CHUNK_VECTOR_INDEX} IF NOT EXISTS
+        FOR (c:`{node_label}`)
+        ON (c.{embedding_property})
+        OPTIONS {{
+          indexConfig: {{
+            `vector.dimensions`: {EMBEDDING_DIM},
+            `vector.similarity_function`: '{VECTOR_SIMILARITY_FUNCTION}'
+          }}
+        }}
+        """
+        try:
+            self.graph.query(query)
+            print(f"✅ Vector index created/verified: {CHUNK_VECTOR_INDEX}")
+        except Exception as e:
+            # 索引可能已存在，这不是错误
+            if "already exists" in str(e).lower() or "equivalent" in str(e).lower():
+                print(f"✅ Vector index already exists: {CHUNK_VECTOR_INDEX}")
+            else:
+                print(f"⚠️ Vector index creation warning: {e}")
+                raise
+
     def create_chunk_index(self,
                          node_label: str = '__Chunk__',
                          text_property: str = 'text',
-                         embedding_property: str = 'embedding') -> Optional[Neo4jVector]:
+                         embedding_property: str = 'embedding') -> bool:
         """
-        为文本块节点生成embeddings并创建向量存储接口
+        为文本块节点生成embeddings并创建 Neo4j Vector Index（工程级实践）
+
+        流程：
+        1. 计算 embeddings
+        2. 显式创建 vector index
 
         Args:
             node_label: 文本块节点的标签
@@ -63,13 +103,13 @@ class ChunkIndexManager(BaseIndexer):
             embedding_property: 存储embedding的属性名
 
         Returns:
-            Neo4jVector: 创建的向量存储对象
+            bool: 是否成功创建索引
         """
         start_time = time.time()
 
-        # 先清除已有索引
+        # 先清除已有的旧索引
         self.clear_existing_index()
-        
+
         # 获取所有需要处理的文本块节点
         chunks = self.graph.query(
             f"""
@@ -78,47 +118,35 @@ class ChunkIndexManager(BaseIndexer):
             RETURN id(c) AS neo4j_id, c.id AS chunk_id
             """
         )
-        
+
         if not chunks:
-            print("没有找到需要处理的文本块节点")
-            # 即使没有需要处理的节点，也尝试创建向量存储接口
+            print("没有找到需要处理的文本块节点（可能已存在 embeddings）")
+            # 即使没有新的节点，也确保 vector index 存在
             try:
-                vector_store = Neo4jVector.from_existing_graph(
-                    self.embeddings,
-                    node_label=node_label,
-                    text_node_properties=[text_property],
-                    embedding_node_property=embedding_property
-                )
-                
-                print("成功连接到现有向量索引")
-                return vector_store
+                self.create_vector_index(node_label, embedding_property)
+                print("✅ Vector index 已就绪（无新节点需要处理）")
+                return True
             except Exception as e:
-                print(f"连接到向量存储时出错: {e}")
-                return None
-            
-        print(f"开始为 {len(chunks)} 个文本块生成embeddings")
-        
-        # 批量处理所有文本块
+                print(f"❌ Vector index 创建失败: {e}")
+                return False
+
+        print(f"开始为 {len(chunks)} 个文本块生成 embeddings")
+
+        # 步骤 1: 批量计算并更新 embeddings
         self._process_embeddings_in_batches(chunks, node_label, text_property, embedding_property)
-        
-        # 不尝试创建新的向量索引，只连接到现有的
+
+        # 步骤 2: 显式创建 Neo4j Vector Index（关键！）
         try:
-            # 创建向量存储对象
-            vector_store = Neo4jVector.from_existing_graph(
-                self.embeddings,
-                node_label=node_label,
-                text_node_properties=[text_property],
-                embedding_node_property=embedding_property
-            )
-            
+            self.create_vector_index(node_label, embedding_property)
+
             end_time = time.time()
-            print(f"索引创建成功，总耗时: {end_time - start_time:.2f}秒")
-            print(f"其中: embedding计算: {self.embedding_time:.2f}秒, 数据库操作: {self.db_time:.2f}秒")
-            
-            return vector_store
+            print(f"\n✅ 索引创建成功，总耗时: {end_time - start_time:.2f}秒")
+            print(f"   其中: embedding计算: {self.embedding_time:.2f}秒, 数据库操作: {self.db_time:.2f}秒")
+
+            return True
         except Exception as e:
-            print(f"创建向量存储时出错: {e}")
-            return None
+            print(f"❌ Vector index 创建失败: {e}")
+            return False
     
     def _process_embeddings_in_batches(self, chunks: List[Dict[str, Any]], 
                                       node_label: str, text_property: str, 

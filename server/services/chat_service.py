@@ -9,6 +9,10 @@ import asyncio
 from services.agent_service import agent_manager
 from services.kg_service import extract_kg_from_message
 from utils.concurrent import chat_manager, feedback_manager
+from utils.semantic_cache import get_semantic_cache
+
+# 导入 embeddings 模型（用于语义缓存）
+from graphrag_agent.models.get_models import get_embeddings_model
 
 
 async def process_chat(message: str, session_id: str, debug: bool = False, agent_type: str = "hybrid_agent", 
@@ -42,15 +46,62 @@ async def process_chat(message: str, session_id: str, debug: bool = False, agent
     try:
         # 更新操作时间戳
         chat_manager.update_timestamp(lock_key)
-        
+
         # 获取指定的agent
         try:
-            selected_agent = agent_manager.get_agent(agent_type)
-            if agent_type == "deep_research_agent":
-                selected_agent.is_deeper_tool(use_deeper_tool)
+            selected_agent = agent_manager.get_agent(agent_type, session_id)
+            # 使用多态接口配置Agent（所有Agent都支持，但只有需要的Agent会处理）
+            selected_agent.configure({
+                "use_deeper_tool": use_deeper_tool,
+                "show_thinking": show_thinking
+            })
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        
+
+        # ========== 语义缓存检查 ==========
+        # 1. 计算查询的向量表示
+        try:
+            start_semantic = time.time()
+            embeddings_model = get_embeddings_model()
+            query_embedding = embeddings_model.embed_query(message)
+
+            # 2. 检查语义缓存
+            semantic_cache = get_semantic_cache(threshold=0.95, max_size=1000)
+            cached_response = semantic_cache.get(query_embedding)
+
+            if cached_response:
+                print(f"✅ 语义缓存命中！耗时: {time.time() - start_semantic:.4f}s")
+
+                # 调试模式需要提供额外信息
+                if debug:
+                    mock_log = [{
+                        "node": "semantic_cache_hit",
+                        "timestamp": time.time(),
+                        "input": message,
+                        "output": f"语义缓存命中（相似度 ≥ 0.95），跳过 Agent 执行"
+                    }]
+
+                    # 使用多态接口判断是否支持KG提取
+                    kg_data = {"nodes": [], "links": []}
+                    if selected_agent.supports_kg_extraction():
+                        try:
+                            kg_data = extract_kg_from_message(cached_response)
+                        except:
+                            kg_data = {"nodes": [], "links": []}
+
+                    return {
+                        "answer": cached_response,
+                        "execution_log": mock_log,
+                        "kg_data": kg_data,
+                        "cache_source": "semantic"
+                    }
+                else:
+                    return {"answer": cached_response, "cache_source": "semantic"}
+        except Exception as e:
+            # 语义缓存失败不影响主流程
+            print(f"语义缓存检查失败（继续正常流程）: {e}")
+
+        # ========== Agent 快速缓存检查 ==========
         # 首先尝试快速路径 - 跳过完整处理
         try:
             start_fast = time.time()
@@ -63,20 +114,20 @@ async def process_chat(message: str, session_id: str, debug: bool = False, agent
                 if debug:
                     # 提供模拟的执行日志
                     mock_log = [{
-                        "node": "fast_cache_hit", 
-                        "timestamp": time.time(), 
-                        "input": message, 
+                        "node": "fast_cache_hit",
+                        "timestamp": time.time(),
+                        "input": message,
                         "output": "高质量缓存命中，跳过完整处理"
                     }]
-                    
-                    # 尝试提取图谱数据，对deep_research_agent禁用
+
+                    # 使用多态接口判断是否支持KG提取
                     kg_data = {"nodes": [], "links": []}
-                    if agent_type != "deep_research_agent":
+                    if selected_agent.supports_kg_extraction():
                         try:
                             kg_data = extract_kg_from_message(fast_result)
                         except:
                             kg_data = {"nodes": [], "links": []}
-                        
+
                     return {
                         "answer": fast_result,
                         "execution_log": mock_log,
@@ -89,109 +140,123 @@ async def process_chat(message: str, session_id: str, debug: bool = False, agent
             # 快速路径失败，继续常规流程
             print(f"快速路径检查失败: {e}")
         
-        # 检查是否为deep_research_agent且是否显示思考过程
-        show_thinking = agent_type == "deep_research_agent"
-        
         if debug:
-            # 在Debug模式下使用ask_with_trace或ask_with_thinking，并返回知识图谱数据
-            if agent_type == "deep_research_agent":
-                # 使用ask_with_thinking方法获取带思考过程的结果
-                result = selected_agent.ask_with_thinking(message, thread_id=session_id)
-                
-                # 从结果字典中获取各个组件
-                thinking_process = result.get("thinking_process", "")
-                answer_content = result.get("answer", "")
-                retrieved_info = result.get("retrieved_info", [])
-                reference = result.get("reference", {})
-                execution_logs = result.get("execution_logs", [])  # 获取执行日志
-                
-                # 为deep_research_agent禁用知识图谱数据
-                kg_data = {"nodes": [], "links": []}
-                
-                # 提取迭代轮次信息以便前端展示
-                iterations = extract_iterations(retrieved_info)
-                
-                # 如果未能从retrieved_info提取到有效迭代，尝试从thinking_process中提取
-                if not iterations or len(iterations) == 0:
-                    print("从retrieved_info中没有提取到迭代信息，尝试从thinking_process中提取")
-                    thinking_iterations = extract_iterations_from_thinking(thinking_process)
-                    if thinking_iterations and len(thinking_iterations) > 0:
-                        print(f"从thinking_process中提取到{len(thinking_iterations)}轮迭代")
-                        iterations = thinking_iterations
-                
-                # 构建执行日志
+            # 在Debug模式下，所有Agent都使用ask_with_thinking方法（基于多态）
+            result = selected_agent.ask_with_thinking(message, thread_id=session_id)
+
+            # 从结果字典中获取各个组件
+            thinking_process = result.get("thinking_process", "")
+            answer_content = result.get("answer", "")
+            retrieved_info = result.get("retrieved_info", [])
+            reference = result.get("reference", {})
+            execution_logs = result.get("execution_logs", [])  # 获取执行日志
+
+            # 使用多态接口判断是否支持KG提取
+            kg_data = {"nodes": [], "links": []}
+            if selected_agent.supports_kg_extraction():
+                try:
+                    kg_data = extract_kg_from_message(answer_content)
+                except:
+                    kg_data = {"nodes": [], "links": []}
+
+            # 提取迭代轮次信息以便前端展示（仅用于深度研究Agent）
+            iterations = extract_iterations(retrieved_info) if retrieved_info else []
+
+            # 如果未能从retrieved_info提取到有效迭代，尝试从thinking_process中提取
+            if not iterations and thinking_process:
+                print("从retrieved_info中没有提取到迭代信息，尝试从thinking_process中提取")
+                thinking_iterations = extract_iterations_from_thinking(thinking_process)
+                if thinking_iterations and len(thinking_iterations) > 0:
+                    print(f"从thinking_process中提取到{len(thinking_iterations)}轮迭代")
+                    iterations = thinking_iterations
+
+            # 构建执行日志
+            if execution_logs:
                 execution_log = [{
-                    "node": "deep_research", 
-                    "input": message, 
-                    "output": "\n".join(execution_logs) if execution_logs else "无执行日志"
+                    "node": "agent_execution",
+                    "input": message,
+                    "output": "\n".join(execution_logs) if isinstance(execution_logs, list) else str(execution_logs)
                 }]
-                
-                # 打印日志长度信息
-                logs_count = len(execution_logs)
+                logs_count = len(execution_logs) if isinstance(execution_logs, list) else 1
                 print(f"执行日志数量: {logs_count}条")
-                
-                # 构建完整响应，包含执行日志
-                return {
-                    "answer": answer_content,
-                    "execution_log": execution_log,
-                    "kg_data": kg_data,
-                    "reference": reference,
-                    "iterations": iterations,
-                    "raw_thinking": thinking_process,
-                    "execution_logs": execution_logs,
-                }
             else:
-                # 其他Agent使用标准的ask_with_trace
-                result = selected_agent.ask_with_trace(
-                    message, 
-                    thread_id=session_id,
+                execution_log = result.get("execution_logs", [])
+
+            # 构建完整响应
+            response = {
+                "answer": answer_content,
+                "execution_log": execution_log,
+                "kg_data": kg_data,
+            }
+
+            # 添加可选字段（如果存在）
+            if reference:
+                response["reference"] = reference
+            if iterations:
+                response["iterations"] = iterations
+            if thinking_process:
+                response["raw_thinking"] = thinking_process
+            if execution_logs:
+                response["execution_logs"] = execution_logs
+
+            # ========== 写入语义缓存 ==========
+            try:
+                semantic_cache.add(
+                    query_embedding,
+                    answer_content,
+                    metadata={
+                        "session_id": session_id,
+                        "agent_type": agent_type,
+                        "query": message
+                    }
                 )
-                
-                # 从结果中提取知识图谱数据
-                kg_data = extract_kg_from_message(result["answer"])
-                
-                return {
-                    "answer": result["answer"],
-                    "execution_log": result["execution_log"],
-                    "kg_data": kg_data,
-                }
+                print(f"已将响应写入语义缓存")
+            except Exception as e:
+                print(f"写入语义缓存失败（不影响返回结果）: {e}")
+
+            return response
         else:
-            # 标准模式
-            if agent_type == "deep_research_agent" and show_thinking:
-                # 使用ask_with_thinking方法获取带思考过程的结果
-                result = selected_agent.ask_with_thinking(message, thread_id=session_id)
-                
-                # 从结果字典中获取各个组件
-                thinking_process = result.get("thinking_process", "")
-                answer_content = result.get("answer", "")
-                execution_logs = result.get("execution_logs", [])
-                
-                # 返回思考过程、答案和执行日志
-                return {
-                    "answer": answer_content,
-                    "raw_thinking": thinking_process,
-                    "execution_logs": execution_logs
-                }
-            else:
-                # 普通模式，使用标准ask方法
-                # 检查是否为DeepResearchAgent类型，只有DeepResearchAgent支持show_thinking参数
-                if agent_type == "deep_research_agent":
-                    answer = selected_agent.ask(
-                        message, 
-                        thread_id=session_id,
-                        show_thinking=show_thinking # deep_research_agent支持此参数
-                    )
-                else:
-                    # 其他Agent类型不支持show_thinking参数
-                    answer = selected_agent.ask(
-                        message, 
-                        thread_id=session_id
-                    )
-                return {"answer": answer}
+            # 标准模式 - 所有Agent都使用统一的ask接口
+            # show_thinking已通过configure()传递给Agent，由Agent内部处理
+            answer = selected_agent.ask(
+                message,
+                thread_id=session_id,
+                show_thinking=show_thinking  # 保持接口兼容，但仅DeepResearchAgent使用
+            )
+
+            # ========== 写入语义缓存 ==========
+            try:
+                semantic_cache.add(
+                    query_embedding,
+                    answer,
+                    metadata={
+                        "session_id": session_id,
+                        "agent_type": agent_type,
+                        "query": message
+                    }
+                )
+                print(f"已将响应写入语义缓存")
+            except Exception as e:
+                print(f"写入语义缓存失败（不影响返回结果）: {e}")
+
+            return {"answer": answer}
     except Exception as e:
-        print(f"处理聊天请求时出错: {str(e)}")
+        error_msg = str(e)
+        print(f"处理聊天请求时出错: {error_msg}")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+
+        # 检查是否是向量索引不存在的错误
+        if "vector index" in error_msg.lower() and "does not exist" in error_msg.lower():
+            friendly_msg = (
+                "知识图谱尚未构建，请先完成以下步骤：\n"
+                "1. 进入「📚 文档管理」上传文档\n"
+                "2. 进入「🏗️ 构建管理」点击「全量构建」\n"
+                "3. 等待构建完成后再进行查询\n\n"
+                "注意：首次构建可能需要几分钟时间，具体取决于文档数量。"
+            )
+            raise HTTPException(status_code=400, detail=friendly_msg)
+
+        raise HTTPException(status_code=500, detail=error_msg)
     finally:
         # 释放锁
         chat_manager.release_lock(lock_key)
@@ -234,16 +299,57 @@ async def process_chat_stream(
     try:
         # 更新操作时间戳
         chat_manager.update_timestamp(lock_key)
-        
+
         # 获取指定的agent
         try:
-            selected_agent = agent_manager.get_agent(agent_type)
-            if agent_type == "deep_research_agent":
-                selected_agent.is_deeper_tool(use_deeper_tool)
+            selected_agent = agent_manager.get_agent(agent_type, session_id)
+            # 使用多态接口配置Agent
+            selected_agent.configure({
+                "use_deeper_tool": use_deeper_tool,
+                "show_thinking": show_thinking
+            })
         except ValueError as e:
             yield json.dumps({"status": "error", "message": str(e)})
             return
-        
+
+        # ========== 语义缓存检查 ==========
+        query_embedding = None  # 保存用于后续写入缓存
+        try:
+            start_semantic = time.time()
+            embeddings_model = get_embeddings_model()
+            query_embedding = embeddings_model.embed_query(message)
+
+            # 检查语义缓存
+            semantic_cache = get_semantic_cache(threshold=0.95, max_size=1000)
+            cached_response = semantic_cache.get(query_embedding)
+
+            if cached_response:
+                print(f"✅ 语义缓存命中（流式）！耗时: {time.time() - start_semantic:.4f}s")
+
+                # 如果是调试模式，先发送执行日志
+                if debug:
+                    mock_log = {
+                        "node": "semantic_cache_hit",
+                        "timestamp": time.time(),
+                        "input": message,
+                        "output": "语义缓存命中（相似度 ≥ 0.95），跳过 Agent 执行"
+                    }
+                    yield {"execution_log": mock_log}
+
+                # 模拟流式输出缓存的响应
+                chunk_size = 10
+                for i in range(0, len(cached_response), chunk_size):
+                    chunk = cached_response[i:i+chunk_size]
+                    yield json.dumps({"status": "token", "content": chunk})
+                    await asyncio.sleep(0.01)  # 小延迟模拟流式输出
+
+                yield json.dumps({"status": "done", "cache_source": "semantic"})
+                return
+        except Exception as e:
+            # 语义缓存失败不影响主流程
+            print(f"语义缓存检查失败（继续正常流程）: {e}")
+
+        # ========== Agent 快速缓存检查 ==========
         # 首先尝试快速路径缓存
         try:
             start_fast = time.time()
@@ -269,23 +375,47 @@ async def process_chat_stream(
         
         # 保存执行轨迹（针对调试模式）
         execution_log = []
-        
-        # 对于深度研究Agent使用思考流
-        if agent_type == "deep_research_agent" and show_thinking:
-            # 获取思考过程的流处理
+
+        # 用于收集完整的答案（写入语义缓存）
+        full_answer = []
+
+        # 使用统一的流式接口（所有Agent都支持ask_stream）
+        # show_thinking已通过configure()传递，由Agent内部处理
+        if debug:
+            # Debug模式：先获取执行轨迹，再流式输出答案
+            trace_result = await asyncio.to_thread(
+                selected_agent.ask_with_trace,
+                message,
+                thread_id=session_id
+            )
+
+            # 发送执行轨迹
+            if "execution_log" in trace_result:
+                for log_entry in trace_result["execution_log"]:
+                    yield {"execution_log": log_entry}
+                    execution_log.append(log_entry)
+
+            # 发送答案，模拟流式输出
+            answer = trace_result["answer"]
+            chunk_size = 10  # 每个块的字符数
+            for i in range(0, len(answer), chunk_size):
+                chunk = answer[i:i+chunk_size]
+                yield json.dumps({"status": "token", "content": chunk})
+                await asyncio.sleep(0.01)  # 小延迟模拟流式输出
+
+            # 保存完整答案用于语义缓存
+            full_answer.append(answer)
+        else:
+            # 非Debug模式：直接使用流式接口
             thinking_step = False
             thinking_content = ""
-            
-            async for chunk in selected_agent.ask_stream(message, thread_id=session_id):
+
+            async for chunk in selected_agent.ask_stream(message, thread_id=session_id, show_thinking=show_thinking):
                 if isinstance(chunk, dict):
                     # 字典形式包含状态信息
-                    if "execution_log" in chunk and debug:
-                        execution_log.append(chunk["execution_log"])
-                        yield {"execution_log": chunk["execution_log"]}
-                    else:
-                        yield chunk
+                    yield chunk
                 elif "[深度研究]" in chunk or "[KB检索]" in chunk:
-                    # 这是思考步骤
+                    # 这是思考步骤（仅DeepResearchAgent会产生）
                     thinking_step = True
                     thinking_content += chunk
                     yield json.dumps({"status": "thinking", "content": chunk})
@@ -294,86 +424,54 @@ async def process_chat_stream(
                     if thinking_step:
                         thinking_step = False
                         yield json.dumps({"status": "answer_start"})
-                    
+
+                    # 收集答案用于语义缓存
+                    full_answer.append(chunk)
                     yield json.dumps({"status": "token", "content": chunk})
-            
+
             # 发送完成消息
-            yield json.dumps({"status": "done", "thinking_content": thinking_content})
-            
-            return
-        
-        # 对于其他Agent类型，使用标准流式处理
-        if agent_type in ["hybrid_agent", "graph_agent", "naive_rag_agent"]:
-            # 为调试模式收集执行轨迹
-            if debug:
-                # 首先获取执行轨迹
-                trace_result = await asyncio.to_thread(
-                    selected_agent.ask_with_trace,
-                    message,
-                    thread_id=session_id
-                )
-                
-                # 发送执行轨迹
-                if "execution_log" in trace_result:
-                    for log_entry in trace_result["execution_log"]:
-                        yield {"execution_log": log_entry}
-                        execution_log.append(log_entry)
-                
-                # 发送答案，模拟流式输出
-                answer = trace_result["answer"]
-                chunk_size = 10  # 每个块的字符数
-                for i in range(0, len(answer), chunk_size):
-                    chunk = answer[i:i+chunk_size]
-                    yield json.dumps({"status": "token", "content": chunk})
-                    await asyncio.sleep(0.01)  # 小延迟模拟流式输出
+            if thinking_content:
+                yield json.dumps({"status": "done", "thinking_content": thinking_content})
             else:
-                # 使用Agent的流式接口
-                async for chunk in selected_agent.ask_stream(message, thread_id=session_id):
-                    yield json.dumps({"status": "token", "content": chunk})
-            
-            # 发送完成消息
-            yield json.dumps({"status": "done"})
-        else:
-            # 对于不支持流式处理的Agent，回退到非流式处理并模拟流
-            if debug:
-                # 首先获取执行轨迹
-                trace_result = await asyncio.to_thread(
-                    selected_agent.ask_with_trace,
-                    message,
-                    thread_id=session_id
+                yield json.dumps({"status": "done"})
+
+        # ========== 写入语义缓存 ==========
+        if query_embedding is not None and full_answer:
+            try:
+                complete_answer = "".join(full_answer)
+                semantic_cache.add(
+                    query_embedding,
+                    complete_answer,
+                    metadata={
+                        "session_id": session_id,
+                        "agent_type": agent_type,
+                        "query": message,
+                        "streaming": True
+                    }
                 )
-                
-                # 发送执行轨迹
-                if "execution_log" in trace_result:
-                    for log_entry in trace_result["execution_log"]:
-                        yield {"execution_log": log_entry}
-                        execution_log.append(log_entry)
-                
-                # 发送答案，模拟流式输出
-                answer = trace_result["answer"]
-                chunk_size = 10  # 每个块的字符数
-                for i in range(0, len(answer), chunk_size):
-                    chunk = answer[i:i+chunk_size]
-                    yield json.dumps({"status": "token", "content": chunk})
-                    await asyncio.sleep(0.01)  # 小延迟模拟流式输出
-            else:
-                # 非调试模式，简单获取答案
-                answer = selected_agent.ask(message, thread_id=session_id)
-                
-                # 分块发送响应以模拟流式输出
-                chunk_size = 10  # 每个块的字符数
-                for i in range(0, len(answer), chunk_size):
-                    chunk = answer[i:i+chunk_size]
-                    yield json.dumps({"status": "token", "content": chunk})
-                    await asyncio.sleep(0.01)  # 小延迟模拟流式输出
-            
-            # 发送完成消息
-            yield json.dumps({"status": "done"})
+                print(f"已将流式响应写入语义缓存（长度: {len(complete_answer)}）")
+            except Exception as e:
+                print(f"写入语义缓存失败（不影响返回结果）: {e}")
+
+        return
             
     except Exception as e:
-        print(f"处理聊天请求时出错: {str(e)}")
+        error_msg = str(e)
+        print(f"处理聊天请求时出错: {error_msg}")
         print(traceback.format_exc())
-        yield json.dumps({"status": "error", "message": str(e)})
+
+        # 检查是否是向量索引不存在的错误
+        if "vector index" in error_msg.lower() and "does not exist" in error_msg.lower():
+            friendly_msg = (
+                "知识图谱尚未构建，请先完成以下步骤：\n"
+                "1. 进入「📚 文档管理」上传文档\n"
+                "2. 进入「🏗️ 构建管理」点击「全量构建」\n"
+                "3. 等待构建完成后再进行查询\n\n"
+                "注意：首次构建可能需要几分钟时间，具体取决于文档数量。"
+            )
+            yield json.dumps({"status": "error", "message": friendly_msg})
+        else:
+            yield json.dumps({"status": "error", "message": error_msg})
     finally:
         # 释放锁
         chat_manager.release_lock(lock_key)

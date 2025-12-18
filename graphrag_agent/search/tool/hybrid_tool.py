@@ -193,7 +193,13 @@ class HybridSearchTool(BaseSearchTool):
         返回:
             List[str]: 实体ID列表
         """
-        return self.vector_search(query, limit)
+        return self.entity_vector_search(query, limit)
+
+    def _entity_vector_search(self, query: str, limit: int = 5) -> List[str]:
+        """
+        针对实体的向量搜索封装，便于后续扩展或区分索引
+        """
+        return self.entity_vector_search(query, limit)
 
     def _fallback_text_search(self, query: str, limit: int = 5) -> List[str]:
         """

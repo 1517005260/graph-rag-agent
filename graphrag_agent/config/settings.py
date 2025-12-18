@@ -100,6 +100,21 @@ OVERLAP = _get_env_int("CHUNK_OVERLAP", 100) or 100  # 分块重叠长度
 MAX_TEXT_LENGTH = _get_env_int("MAX_TEXT_LENGTH", 500000) or 500000  # 最大文本长度
 similarity_threshold = _get_env_float("SIMILARITY_THRESHOLD", 0.9) or 0.9  # 向量相似度阈值
 
+# ===== Vector Index 配置（全局唯一） =====
+
+# Vector index names（全系统唯一，用于 Neo4j Vector Index）
+CHUNK_VECTOR_INDEX = os.getenv("CHUNK_VECTOR_INDEX", "chunk_embedding_index")
+ENTITY_VECTOR_INDEX = os.getenv("ENTITY_VECTOR_INDEX", "entity_embedding_index")
+
+# Embedding dimension（必须和模型一致）
+# text-embedding-3-large: 1536 维
+# text-embedding-3-small: 512 维
+# text-embedding-ada-002: 1536 维
+EMBEDDING_DIM = _get_env_int("EMBEDDING_DIM", 1536) or 1536
+
+# Vector similarity function: cosine / euclidean / dot_product
+VECTOR_SIMILARITY_FUNCTION = os.getenv("VECTOR_SIMILARITY_FUNCTION", "cosine")
+
 # ===== 回答生成配置 =====
 
 response_type = os.getenv("RESPONSE_TYPE", "多个段落")  # 默认回答形式
@@ -215,25 +230,35 @@ NEO4J_CONFIG = {
 
 # ===== LLM 与嵌入模型配置 =====
 
+# 通用配置（兼容旧版）
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
-OPENAI_EMBEDDINGS_MODEL = os.getenv("OPENAI_EMBEDDINGS_MODEL") or None
+
+# LLM 专用配置（如果不设置则使用通用配置）
+OPENAI_LLM_API_KEY = os.getenv("OPENAI_LLM_API_KEY") or OPENAI_API_KEY
+OPENAI_LLM_BASE_URL = os.getenv("OPENAI_LLM_BASE_URL") or OPENAI_BASE_URL
 OPENAI_LLM_MODEL = os.getenv("OPENAI_LLM_MODEL") or None
+
+# 嵌入模型专用配置（如果不设置则使用通用配置）
+OPENAI_EMBEDDING_API_KEY = os.getenv("OPENAI_EMBEDDING_API_KEY") or OPENAI_API_KEY
+OPENAI_EMBEDDING_BASE_URL = os.getenv("OPENAI_EMBEDDING_BASE_URL") or OPENAI_BASE_URL
+OPENAI_EMBEDDINGS_MODEL = os.getenv("OPENAI_EMBEDDINGS_MODEL") or None
+
 LLM_TEMPERATURE = _get_env_float("TEMPERATURE", None)
 LLM_MAX_TOKENS = _get_env_int("MAX_TOKENS", None)
 
 OPENAI_EMBEDDING_CONFIG = {
     "model": OPENAI_EMBEDDINGS_MODEL,
-    "api_key": OPENAI_API_KEY,
-    "base_url": OPENAI_BASE_URL,
+    "api_key": OPENAI_EMBEDDING_API_KEY,
+    "base_url": OPENAI_EMBEDDING_BASE_URL,
 }
 
 OPENAI_LLM_CONFIG = {
     "model": OPENAI_LLM_MODEL,
     "temperature": LLM_TEMPERATURE,
     "max_tokens": LLM_MAX_TOKENS,
-    "api_key": OPENAI_API_KEY,
-    "base_url": OPENAI_BASE_URL,
+    "api_key": OPENAI_LLM_API_KEY,
+    "base_url": OPENAI_LLM_BASE_URL,
 }
 
 # ===== 相似实体检测参数 =====

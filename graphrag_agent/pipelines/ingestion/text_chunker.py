@@ -1,4 +1,10 @@
-import hanlp
+try:
+    import hanlp
+    HANLP_AVAILABLE = True
+except ImportError:
+    HANLP_AVAILABLE = False
+    hanlp = None
+
 import re
 from typing import List, Tuple
 
@@ -22,7 +28,20 @@ class ChineseTextChunker:
         self.chunk_size = chunk_size
         self.overlap = overlap
         self.max_text_length = max_text_length
-        self.tokenizer = hanlp.load(hanlp.pretrained.tok.COARSE_ELECTRA_SMALL_ZH)
+
+        # 尝试加载 HanLP 分词器，如果失败则使用简单分词
+        if HANLP_AVAILABLE:
+            try:
+                self.tokenizer = hanlp.load(hanlp.pretrained.tok.COARSE_ELECTRA_SMALL_ZH)
+                self.use_hanlp = True
+            except Exception as e:
+                print(f"警告: HanLP 加载失败 ({e})，使用简单分词器")
+                self.tokenizer = None
+                self.use_hanlp = False
+        else:
+            print("警告: HanLP 不可用，使用简单分词器")
+            self.tokenizer = None
+            self.use_hanlp = False
         
     def process_files(self, file_contents: List[Tuple[str, str]]) -> List[Tuple[str, str, List[List[str]]]]:
         """
@@ -165,10 +184,10 @@ class ChineseTextChunker:
     def _safe_tokenize(self, text: str) -> List[str]:
         """
         安全的分词方法，处理可能的异常
-        
+
         Args:
             text: 要分词的文本
-            
+
         Returns:
             分词结果列表
         """
@@ -176,11 +195,37 @@ class ChineseTextChunker:
             # 检查文本长度
             if len(text) > self.max_text_length:
                 return list(text)
-            
-            tokens = self.tokenizer(text)
-            return tokens if tokens else []
+
+            # 如果 HanLP 可用，使用 HanLP 分词
+            if self.use_hanlp and self.tokenizer is not None:
+                tokens = self.tokenizer(text)
+                return tokens if tokens else []
+            else:
+                # 简单分词：按字符分割，保留标点和空格作为独立token
+                return self._simple_tokenize(text)
         except Exception:
-            return list(text)
+            return self._simple_tokenize(text)
+
+    def _simple_tokenize(self, text: str) -> List[str]:
+        """
+        简单的分词方法，作为 HanLP 的后备方案
+        按字符分割，但尝试保持词的完整性
+
+        Args:
+            text: 要分词的文本
+
+        Returns:
+            分词结果列表
+        """
+        if not text:
+            return []
+
+        # 使用正则表达式进行简单分词
+        # 保留连续的字母、数字为一个token，中文字符单独成token
+        import re
+        tokens = re.findall(r'[a-zA-Z0-9]+|[\u4e00-\u9fff]|[^\w\s]|\s+', text)
+        # 过滤掉纯空白token
+        return [t for t in tokens if t.strip()]
         
     def chunk_text(self, text: str) -> List[List[str]]:
         """

@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSE 进度监控 - Server-Sent Events Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            padding: 30px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+
+        .badge-sse {
+            background: #8b5cf6;
+            color: white;
+        }
+
+        .badge-simple {
+            background: #10b981;
+            color: white;
+        }
+
+        .connection-status {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+
+        .connection-status.connected {
+            background: #10b981;
+            color: white;
+        }
+
+        .connection-status.disconnected {
+            background: #ef4444;
+            color: white;
+        }
+
+        .connection-status.connecting {
+            background: #f59e0b;
+            color: white;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .btn-primary {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+
+        .btn-warning {
+            background: #f59e0b;
+            color: white;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .progress-section {
+            margin-bottom: 30px;
+        }
+
+        .progress-item {
+            margin-bottom: 20px;
+        }
+
+        .progress-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 14px;
+            color: #333;
+        }
+
+        .progress-bar-container {
+            width: 100%;
+            height: 24px;
+            background: #e5e7eb;
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+            transition: width 0.5s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .logs-section {
+            background: #f9fafb;
+            border-radius: 8px;
+            padding: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .logs-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #333;
+        }
+
+        .log-entry {
+            padding: 6px 10px;
+            margin-bottom: 4px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: 'Courier New', monospace;
+            background: #e0e7ff;
+            color: #3730a3;
+        }
+
+        .info-box {
+            background: #dbeafe;
+            border-left: 4px solid #3b82f6;
+            padding: 12px 16px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+            font-size: 13px;
+            color: #1e40af;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .stat-item {
+            background: #f3f4f6;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 20px;
+            font-weight: 700;
+            color: #3b82f6;
+        }
+
+        .stat-label {
+            font-size: 11px;
+            color: #6b7280;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>
+            🌊 SSE 进度监控
+            <span class="badge badge-sse">SSE</span>
+            <span class="badge badge-simple">更简单</span>
+        </h1>
+        <p class="subtitle">Server-Sent Events 实时推送 - 基于 HTTP 的单向通信</p>
+
+        <div class="info-box">
+            <strong>💡 提示：</strong> SSE 比 WebSocket 更轻量，适合单向推送场景。浏览器会自动重连断开的 SSE 连接。
+        </div>
+
+        <div>
+            <span id="connectionStatus" class="connection-status disconnected">未连接</span>
+        </div>
+
+        <div class="controls">
+            <button class="btn-primary" onclick="connectSSE()">连接 SSE</button>
+            <button class="btn-success" onclick="startBuild()">触发构建</button>
+            <button class="btn-warning" onclick="refreshStatus()">刷新状态</button>
+            <button class="btn-danger" onclick="disconnectSSE()">断开连接</button>
+        </div>
+
+        <!-- 统计信息 -->
+        <div class="stats">
+            <div class="stat-item">
+                <div class="stat-value" id="statPercent">0%</div>
+                <div class="stat-label">进度</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="statStage">idle</div>
+                <div class="stat-label">阶段</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="statL0Files">0</div>
+                <div class="stat-label">L0 文件</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="statL1Tasks">0</div>
+                <div class="stat-label">L1 任务</div>
+            </div>
+        </div>
+
+        <!-- 进度条 -->
+        <div class="progress-section">
+            <div class="progress-item">
+                <div class="progress-label">
+                    <span id="progressLabel">等待开始</span>
+                    <span id="progressPercent">0%</span>
+                </div>
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="progressBar" style="width: 0%">0%</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 日志区域 -->
+        <div class="logs-section">
+            <div class="logs-title">📋 实时日志</div>
+            <div id="logsContainer"></div>
+        </div>
+    </div>
+
+    <script>
+        let eventSource = null;
+        const API_URL = "http://localhost:8000";
+        const SSE_URL = `${API_URL}/build/sse/progress`;
+
+        // 连接 SSE
+        function connectSSE() {
+            if (eventSource && eventSource.readyState === EventSource.OPEN) {
+                addLog("SSE 已连接");
+                return;
+            }
+
+            updateConnectionStatus("connecting");
+            addLog("正在连接 SSE...");
+
+            eventSource = new EventSource(SSE_URL);
+
+            // 监听连接成功事件
+            eventSource.addEventListener("connected", (event) => {
+                const data = JSON.parse(event.data);
+                updateConnectionStatus("connected");
+                addLog(`✅ ${data.message}`);
+            });
+
+            // 监听状态更新事件
+            eventSource.addEventListener("status", (event) => {
+                const status = JSON.parse(event.data);
+                updateStatus(status);
+            });
+
+            // 监听错误
+            eventSource.onerror = (error) => {
+                console.error("SSE 错误:", error);
+                updateConnectionStatus("disconnected");
+                addLog("❌ SSE 连接错误或断开");
+
+                // SSE 会自动重连，但我们可以手动关闭
+                // eventSource.close();
+            };
+
+            // 监听连接打开
+            eventSource.onopen = () => {
+                updateConnectionStatus("connected");
+                addLog("SSE 连接已建立");
+            };
+        }
+
+        // 断开 SSE
+        function disconnectSSE() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+                updateConnectionStatus("disconnected");
+                addLog("SSE 连接已手动关闭");
+            }
+        }
+
+        // 更新连接状态
+        function updateConnectionStatus(status) {
+            const statusEl = document.getElementById("connectionStatus");
+            statusEl.className = `connection-status ${status}`;
+
+            if (status === "connected") {
+                statusEl.textContent = "已连接";
+            } else if (status === "connecting") {
+                statusEl.textContent = "连接中...";
+            } else {
+                statusEl.textContent = "未连接";
+            }
+        }
+
+        // 更新状态
+        function updateStatus(status) {
+            // 更新进度条
+            const percent = status.percent || 0;
+            const details = status.details || "等待开始";
+            const stage = status.stage || "idle";
+
+            document.getElementById("progressBar").style.width = `${percent}%`;
+            document.getElementById("progressBar").textContent = `${percent}%`;
+            document.getElementById("progressLabel").textContent = details;
+            document.getElementById("progressPercent").textContent = `${percent}%`;
+
+            // 更新统计
+            document.getElementById("statPercent").textContent = `${percent}%`;
+            document.getElementById("statStage").textContent = stage;
+
+            if (status.stats) {
+                if (status.stats.l0_files !== undefined) {
+                    document.getElementById("statL0Files").textContent = status.stats.l0_files;
+                }
+                if (status.stats.l1_tasks !== undefined) {
+                    document.getElementById("statL1Tasks").textContent = status.stats.l1_tasks;
+                }
+            }
+
+            // 添加日志
+            if (status.logs && status.logs.length > 0) {
+                const latestLog = status.logs[status.logs.length - 1];
+                // 只添加新日志（避免重复）
+                addLog(latestLog);
+            }
+        }
+
+        // 添加日志
+        function addLog(message) {
+            const logsContainer = document.getElementById("logsContainer");
+            const logEntry = document.createElement("div");
+            logEntry.className = "log-entry";
+            logEntry.textContent = message;
+
+            logsContainer.insertBefore(logEntry, logsContainer.firstChild);
+
+            // 限制日志条数
+            if (logsContainer.children.length > 30) {
+                logsContainer.removeChild(logsContainer.lastChild);
+            }
+        }
+
+        // 触发构建
+        async function startBuild() {
+            try {
+                const response = await fetch(`${API_URL}/build/run`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        mode: "incremental",
+                        force: false,
+                        skip_l0: false,
+                        skip_l1: false
+                    })
+                });
+
+                const result = await response.json();
+                addLog(`构建任务: ${result.message}`);
+            } catch (error) {
+                addLog(`❌ 触发构建失败: ${error.message}`);
+            }
+        }
+
+        // 刷新状态（使用快照 API）
+        async function refreshStatus() {
+            try {
+                const response = await fetch(`${API_URL}/build/sse/status`);
+                const status = await response.json();
+                updateStatus(status);
+                addLog("状态已刷新");
+            } catch (error) {
+                addLog(`❌ 刷新状态失败: ${error.message}`);
+            }
+        }
+
+        // 页面加载时的提示
+        window.onload = () => {
+            addLog("页面加载完成，点击「连接 SSE」开始监控");
+        };
+
+        // 页面卸载时关闭 SSE
+        window.onbeforeunload = () => {
+            if (eventSource) {
+                eventSource.close();
+            }
+        };
+    </script>
+</body>
+</html>

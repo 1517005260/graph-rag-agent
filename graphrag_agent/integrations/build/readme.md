@@ -14,13 +14,39 @@ graphrag_agent/integrations/build/
 │   ├── incremental_update_scheduler.py   # 增量更新调度器
 │   └── manual_edit_manager.py            # 手动编辑同步管理器
 ├── incremental_graph_builder.py          # 增量图谱更新构建器
-├── incremental_update.py                 # 增量更新管理程序
+├── incremental_update.py                 # 增量更新管理程序（V1）
+├── incremental_update_v2.py              # 🆕 增量更新管理程序（V2，L0/L1拆分架构）
 └── main.py                               # 主程序入口，整合完整流程
 ```
 
 ## 模块概述
 
 `graphrag_agent/integrations/build` 模块是知识图谱系统的高层构建工具，封装了 `graphrag_agent/graph` 和 `graphrag_agent/community` 等底层模块，提供完整的图谱构建、索引创建和增量更新流程。本模块采用了模块化设计，将图谱构建过程分解为多个独立且可组合的步骤，既支持完整的一站式构建，也支持单独执行特定步骤。
+
+### 🆕 V2 增量更新引擎
+
+`IncrementalUpdateManagerV2` 是新一代增量更新管理器，采用 **L0/L1 拆分架构**，显著提升用户体验：
+
+**核心特性**：
+1. **L0 快速通道**：文件上传后 10 秒内可搜索（Naive RAG）
+   - 仅执行文本分块和向量化
+   - 无需等待实体提取和图谱构建
+
+2. **L1 慢速通道**：后台异步构建知识图谱
+   - 实体提取、关系构建、社区检测
+   - 使用任务队列管理，支持优先级和并发控制
+
+3. **进度实时追踪**：
+   - WebSocket 推送构建进度和文件状态
+   - 前端可实时监控构建过程
+
+4. **零等待体验**：
+   - 用户上传即可搜索，无需等待完整构建
+   - 图谱功能（GraphAgent、HybridAgent）在 L1 完成后自动可用
+
+**与 V1 的对比**：
+- V1：串行处理，用户需等待完整构建（数分钟到数小时）
+- V2：并行处理，用户上传后立即可搜索（<10秒），图谱后台构建
 
 ## 核心实现思路
 
@@ -142,6 +168,39 @@ manager.start_scheduler()
 - `verify_graph_consistency()`: 验证和修复图谱一致性
 - `sync_manual_edits()`: 同步手动编辑，确保不被覆盖
 
+### IncrementalUpdateManagerV2 (新)
+**新一代增量更新管理器**，采用 L0/L1 拆分架构：
+
+```python
+# 创建 V2 管理器
+manager = IncrementalUpdateManagerV2(
+    files_dir=FILES_DIR,
+    broadcaster=broadcaster  # WebSocket 广播器
+)
+
+# L0 快速摄取（同步）
+l0_result = await manager.run_fast_ingestion(file_paths)
+
+# L1 任务提交（异步）
+l1_result = await manager.run_deep_indexing(file_paths)
+
+# 完整流程（L0 + L1）
+result = await manager.run_full_pipeline(file_paths)
+
+# 单文件快速上传
+result = manager.quick_ingest_single_file(file_path)
+task_id = manager.submit_entity_extraction_task(file_path)
+```
+
+核心方法：
+- `run_fast_ingestion()`: L0 快速摄取，文本分块 + 向量化
+- `run_deep_indexing()`: L1 任务提交，实体提取 + 图谱构建
+- `run_full_pipeline()`: 完整流程（L0 + L1 + 一致性验证 + 社区检测）
+- `quick_ingest_single_file()`: 单文件快速处理
+- `submit_entity_extraction_task()`: 提交单文件图谱构建任务
+- `get_file_status()`: 获取文件处理状态（L0/L1 是否完成）
+- `get_queue_status()`: 获取任务队列状态
+
 ## 特色功能
 
 ### 1. 三级性能优化策略
@@ -191,7 +250,7 @@ processor = KnowledgeGraphProcessor()
 processor.process_all()
 ```
 
-### 增量更新
+### 增量更新（V1）
 
 ```python
 from graphrag_agent.integrations.build.incremental_update import IncrementalUpdateManager
@@ -204,17 +263,60 @@ manager.run_once()
 manager.start_scheduler()
 ```
 
+### 增量更新（V2 - 推荐）
+
+```python
+from graphrag_agent.integrations.build.incremental_update_v2 import IncrementalUpdateManagerV2
+
+# 创建管理器
+manager = IncrementalUpdateManagerV2(
+    files_dir="./files",
+    broadcaster=get_broadcaster()  # 可选，用于 WebSocket 推送
+)
+
+# 方式 1: 完整流程（L0 + L1）
+result = await manager.run_full_pipeline()
+
+# 方式 2: 分步执行
+l0_result = await manager.run_fast_ingestion()  # 快速摄取
+l1_result = await manager.run_deep_indexing()   # 提交图谱构建任务
+
+# 方式 3: 单文件上传（用户主动触发）
+result = manager.quick_ingest_single_file("/path/to/file.pdf")
+task_id = manager.submit_entity_extraction_task("/path/to/file.pdf", priority=TaskPriority.HIGH)
+
+# 查询状态
+file_status = manager.get_file_status("/path/to/file.pdf")
+queue_status = manager.get_queue_status()
+```
+
 ### 命令行运行
 
 ```bash
 # 执行完整构建
 python graphrag_agent/integrations/build/main.py
 
-# 运行增量更新（单次）
+# V1 增量更新（单次）
 python graphrag_agent/integrations/build/incremental_update.py --once
 
-# 运行增量更新（守护进程模式）
+# V1 增量更新（守护进程模式）
 python graphrag_agent/integrations/build/incremental_update.py --daemon --interval 300
+
+# V2 增量更新（推荐）
+# 完整流程
+python graphrag_agent/integrations/build/incremental_update_v2.py --mode full
+
+# 仅 L0 快速摄取
+python graphrag_agent/integrations/build/incremental_update_v2.py --mode l0
+
+# 仅 L1 任务提交
+python graphrag_agent/integrations/build/incremental_update_v2.py --mode l1
+
+# 单文件处理
+python graphrag_agent/integrations/build/incremental_update_v2.py --file /path/to/file.pdf
+
+# 查看状态
+python graphrag_agent/integrations/build/incremental_update_v2.py --status
 ```
 
 ## 性能和扩展性考量
