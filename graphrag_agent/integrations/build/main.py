@@ -20,6 +20,9 @@ class KnowledgeGraphProcessor:
     def process_all(self):
         """执行完整的处理流程"""
         try:
+            # 合同检查：索引名称和配置
+            self._print_index_contract()
+
             # 显示开始面板
             start_text = Text("开始知识图谱处理流程", style="bold cyan")
             self.console.print(Panel(start_text, border_style="cyan"))
@@ -51,6 +54,25 @@ class KnowledgeGraphProcessor:
             error_text = Text(f"处理过程中出现错误: {str(e)}", style="bold red")
             self.console.print(Panel(error_text, border_style="red"))
             raise
+
+    def _print_index_contract(self):
+        """打印索引契约，防止配置回归"""
+        from graphrag_agent.config.settings import (
+            CHUNK_VECTOR_INDEX,
+            ENTITY_VECTOR_INDEX,
+            EMBEDDING_DIM,
+            LOCAL_SEARCH_SETTINGS,
+        )
+
+        self.console.print(
+            f"[blue]索引契约: CHUNK_VECTOR_INDEX={CHUNK_VECTOR_INDEX}, ENTITY_VECTOR_INDEX={ENTITY_VECTOR_INDEX}[/blue]"
+        )
+        self.console.print(
+            f"[blue]索引契约: LOCAL_SEARCH index_name={LOCAL_SEARCH_SETTINGS.get('index_name')}[/blue]"
+        )
+        self.console.print(
+            f"[blue]Embedding 维度: {EMBEDDING_DIM}[/blue]"
+        )
 
 if __name__ == "__main__":
     try:

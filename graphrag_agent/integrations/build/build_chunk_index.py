@@ -9,8 +9,15 @@ from rich.panel import Panel
 from rich.text import Text
 
 from graphrag_agent.graph import ChunkIndexManager
+from graphrag_agent.graph.core import ensure_vector_index
 from graphrag_agent.config.neo4jdb import get_db_manager
-from graphrag_agent.config.settings import MAX_WORKERS, CHUNK_BATCH_SIZE
+from graphrag_agent.config.settings import (
+    CHUNK_BATCH_SIZE,
+    CHUNK_VECTOR_INDEX,
+    EMBEDDING_DIM,
+    MAX_WORKERS,
+    VECTOR_SIMILARITY_FUNCTION,
+)
 
 import shutup
 shutup.please()
@@ -114,6 +121,15 @@ class ChunkIndexBuilder:
             
             # 只计算和存储embeddings，不创建新的向量索引
             vector_store = self.index_manager.create_chunk_index()
+
+            ensure_vector_index(
+                self.graph,
+                CHUNK_VECTOR_INDEX,
+                "__Chunk__",
+                "embedding",
+                EMBEDDING_DIM,
+                VECTOR_SIMILARITY_FUNCTION,
+            )
             
             self.performance_stats["索引创建"] = time.time() - index_start
             
@@ -214,3 +230,11 @@ class ChunkIndexBuilder:
             error_text = Text(f"处理过程中出现错误: {str(e)}", style="bold red")
             self.console.print(Panel(error_text, border_style="red"))
             raise
+
+def main():
+    builder = ChunkIndexBuilder()
+    builder.process()
+
+
+if __name__ == "__main__":
+    main()

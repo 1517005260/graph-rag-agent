@@ -1,6 +1,7 @@
 import time
 import os
 import psutil
+import traceback
 from typing import Dict, Any, List, Tuple
 
 from rich.console import Console
@@ -9,7 +10,7 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 
-from graphrag_agent.models.get_models import get_llm_model, get_embeddings_model
+from graphrag_agent.models.get_models import get_llm_model
 from graphrag_agent.config.prompts import (
     system_template_build_graph,
     human_template_build_graph
@@ -24,10 +25,11 @@ from graphrag_agent.config.settings import (
     MAX_WORKERS, BATCH_SIZE,
 )
 from graphrag_agent.config.neo4jdb import get_db_manager
-from graphrag_agent.pipelines.ingestion.document_processor import DocumentProcessor
+# from graphrag_agent.pipelines.ingestion.document_processor import DocumentProcessor
 from graphrag_agent.graph import GraphStructureBuilder
-from graphrag_agent.graph import EntityRelationExtractor
 from graphrag_agent.graph import GraphWriter
+from graphrag_agent.graph.extraction.extractor_factory import create_entity_extractor
+from graphrag_agent.graph.indexing.embedding_manager import EmbeddingManager
 
 import shutup
 shutup.please()
@@ -61,11 +63,19 @@ class KnowledgeGraphBuilder:
             "文件处理": 0,  # 改为"文件处理"，包含读取和分块
             "图结构构建": 0,
             "实体抽取": 0,
-            "写入数据库": 0
+            "写入数据库": 0,
+            "向量化": 0
         }
         
         # 初始化组件
         self._initialize_components()
+
+        # [新增] 初始化 EmbeddingManager
+        # 注意：这里不需要显式传入 embedding model，Manager 内部会调用 get_embeddings_model
+        self.embedding_manager = EmbeddingManager(
+            batch_size=10,  # 向量化通常比纯文本处理慢，建议批次小一点
+            max_workers=4
+        )
 
     def _create_progress(self):
         """创建进度显示器"""
@@ -82,29 +92,44 @@ class KnowledgeGraphBuilder:
         init_start = time.time()
         
         with self._create_progress() as progress:
-            task = progress.add_task("[cyan]初始化组件...", total=4)
+            task = progress.add_task("[cyan]初始化组件...", total=3)
             
             # 初始化模型
+            self.console.print("[debug] init: llm ...")
             self.llm = get_llm_model()
-            self.embeddings = get_embeddings_model()
+            # self.embeddings = get_embeddings_model()
+            self.console.print("[debug] init: llm OK")
             progress.advance(task)
             
             # 初始化图数据库连接
+            self.console.print("[debug] init: db_manager ...")
             db_manager = get_db_manager()
+            self.console.print("[debug] init: db_manager OK")
             self.graph = db_manager.graph
+            self.console.print("[debug] init: graph OK")
             progress.advance(task)
             
+            self.console.print("[debug] init: DocumentProcessor import ...")
+            from graphrag_agent.pipelines.ingestion.document_processor import DocumentProcessor
+            self.console.print("[debug] init: DocumentProcessor import OK")
+
             # 初始化文档处理器
+            self.console.print("[debug] init: DocumentProcessor ...")
             self.document_processor = DocumentProcessor(FILES_DIR, CHUNK_SIZE, OVERLAP)
+            self.console.print("[debug] init: DocumentProcessor OK")
             progress.advance(task)
-            
+            self.console.print("[debug] init: GraphStructureBuilder ...")
             self.struct_builder = GraphStructureBuilder(batch_size=BATCH_SIZE)
-            self.entity_extractor = EntityRelationExtractor(
-                self.llm,
-                system_template_build_graph,
-                human_template_build_graph,
-                entity_types,
-                relationship_types,
+            self.console.print("[debug] init: GraphStructureBuilder OK")
+
+            # 使用工厂函数创建实体提取器，自动支持动态配置
+            self.console.print("[debug] init: create_entity_extractor ...")
+            self.entity_extractor = create_entity_extractor(
+                llm=self.llm,
+                system_template=system_template_build_graph,
+                human_template=human_template_build_graph,
+                entity_types=entity_types,
+                relationship_types=relationship_types,
                 max_workers=MAX_WORKERS,
                 batch_size=5  # LLM批处理大小保持小一些以确保质量
             )
@@ -112,7 +137,7 @@ class KnowledgeGraphBuilder:
             # 输出使用的参数
             self.console.print(f"[blue]并行处理线程数: {MAX_WORKERS}[/blue]")
             self.console.print(f"[blue]数据库批处理大小: {BATCH_SIZE}[/blue]")
-            
+            self.console.print("[debug] init: create_entity_extractor OK")
             progress.advance(task)
         
         self.performance_stats["初始化"] = time.time() - init_start
@@ -209,11 +234,15 @@ class KnowledgeGraphBuilder:
                         chunks = doc["chunks"]
                         if doc.get("chunk_count", 0) > 100:
                             # 对于大文件使用并行处理
+                            workers = int(os.getenv("MAX_WORKERS", str(MAX_WORKERS or 1)))
+                            workers = max(1, workers)
+
                             result = self.struct_builder.parallel_process_chunks(
-                                doc["filename"],
-                                chunks,
-                                max_workers=os.cpu_count() or 4
+                               doc["filename"],
+                               chunks,
+                               max_workers=workers
                             )
+
                         else:
                             # 对于小文件使用标准批处理
                             result = self.struct_builder.create_relation_between_chunks(
@@ -262,10 +291,21 @@ class KnowledgeGraphBuilder:
                 # 将处理结果合并回文档数据
                 file_content_map = {}
                 for processed_file in processed_file_contents:
-                    if len(processed_file) >= 4:  # 确保有足够的元素
-                        filename = processed_file[0]
+                    # 兼容不同的返回格式
+                    filename = processed_file[0]
+                    entity_data = []
+
+                    if len(processed_file) == 3:
+                        # 批处理 (process_chunks_batch) 返回: (filename, orig_chunks, proc_chunks)
+                        entity_data = processed_file[2]
+                    elif len(processed_file) >= 4:
+                        # 普通处理 (process_chunks) 返回: [filename, content, chunks, entity_data]
                         entity_data = processed_file[3]
-                        file_content_map[filename] = entity_data
+                    else:
+                        self.console.print(f"[yellow]警告: 文件 {filename} 返回格式异常，长度: {len(processed_file)}[/yellow]")
+                        continue
+
+                    file_content_map[filename] = entity_data
                 
                 # 使用映射将结果放回到原始文档中
                 for doc in self.processed_documents:
@@ -298,15 +338,40 @@ class KnowledgeGraphBuilder:
                         # 获取图构建结果（创建的chunk节点列表）
                         graph_result = doc.get("graph_result", [])
                         entity_data = doc.get("entity_data", [])
-                        
+
                         # 确保graph_result和entity_data存在且长度相等
                         if not graph_result:
                             self.console.print(f"[yellow]警告: 文件 {doc['filename']} 的图结构结果缺失[/yellow]")
                             continue
-                            
+
                         if not entity_data or not isinstance(entity_data, list):
                             self.console.print(f"[yellow]警告: 文件 {doc['filename']} 的实体数据缺失或格式不正确[/yellow]")
                             continue
+
+                        # 强制要求标准格式：entity_data 必须是字典列表
+                        normalized_entity_data = []
+                        for res in entity_data:
+                            if isinstance(res, dict):
+                                # 确保包含必要的键，如果没有则补空列表
+                                res.setdefault("entities", [])
+                                res.setdefault("relationships", [])
+                                res.setdefault("relations", res.get("relationships", []))  # 兼容旧字段名
+                                res.setdefault("bridges", [])
+                                res.setdefault("domains", [])
+                                normalized_entity_data.append(res)
+                            else:
+                                # 遇到非 dict 格式直接报错，强制开发者修复上游 Extractor
+                                self.console.print(
+                                    f"[red]❌ 错误: 发现非法的实体数据格式 {type(res).__name__}，必须为 dict。"
+                                    f"请检查 Extractor 返回格式。忽略此条目。[/red]"
+                                )
+                                # 记录详细信息用于调试
+                                import logging
+                                logging.error(f"Invalid entity data format: type={type(res)}, value={res}")
+                                continue
+
+                        # 使用规范化后的数据
+                        entity_data = normalized_entity_data
                             
                         # 调整数据格式以匹配GraphWriter期望的结构
                         graph_writer_data.append([
@@ -321,13 +386,36 @@ class KnowledgeGraphBuilder:
                 graph_writer = GraphWriter(
                     self.graph, 
                     batch_size=50,
-                    max_workers=os.cpu_count() or 4
+                    max_workers=MAX_WORKERS
                 )
                 graph_writer.process_and_write_graph_documents(graph_writer_data)
                 progress.update(task, completed=1)
             
             self.performance_stats["写入数据库"] = time.time() - write_start
-            
+
+            # 6. [新增] 生成 Embedding 向量
+            embed_start = time.time()
+            self._display_stage_header("生成向量索引 (Embedding)")
+
+            with self._create_progress() as progress:
+                # 给一个不确定的进度条，因为具体数量由 Manager 内部计算
+                task = progress.add_task("[cyan]正在计算实体和文本块向量...", total=None)
+
+                # 调用 EmbeddingManager 的核心处理流程
+                # 它会自动查找数据库中 embedding 为 null 的节点进行计算
+                embed_stats = self.embedding_manager.process(
+                    entity_limit=10000,
+                    chunk_limit=10000
+                )
+
+                progress.update(task, completed=100, total=100)
+
+            # 记录耗时
+            self.performance_stats["向量化"] = time.time() - embed_start
+
+            # 打印向量化结果
+            self.console.print(f"[blue]向量化统计: {embed_stats}[/blue]")
+
             self.console.print("[green]基础知识图谱构建完成[/green]")
             
             # 显示性能统计
@@ -361,6 +449,7 @@ class KnowledgeGraphBuilder:
             
         except Exception as e:
             self.console.print(f"[red]基础图谱构建失败: {str(e)}[/red]")
+            traceback.print_exc()
             raise
 
     def process(self):
@@ -402,9 +491,10 @@ class KnowledgeGraphBuilder:
             if self.start_time is not None:
                 elapsed_time = self.end_time - self.start_time
                 self.console.print(f"[bold yellow]中断前耗时：{self._format_time(elapsed_time)}[/bold yellow]")
-                
+
             error_text = Text(f"构建过程中出现错误: {str(e)}", style="bold red")
             self.console.print(Panel(error_text, border_style="red"))
+            traceback.print_exc()
             raise
 
 if __name__ == "__main__":
@@ -414,3 +504,5 @@ if __name__ == "__main__":
     except Exception as e:
         console = Console()
         console.print(f"[red]执行过程中出现错误: {str(e)}[/red]")
+        traceback.print_exc()
+        raise

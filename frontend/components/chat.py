@@ -3,8 +3,18 @@ import uuid
 import re
 import json
 import traceback
-from utils.api import send_message, send_feedback, get_source_content, get_knowledge_graph_from_message, get_source_file_info_batch, clear_chat, send_message_stream
+from utils.api import (
+    send_message,
+    send_feedback,
+    get_source_content,
+    get_knowledge_graph_from_message,
+    get_source_file_info_batch,
+    clear_chat,
+    send_message_stream,
+    get_system_status,
+)
 from utils.helpers import extract_source_ids
+from utils.state import save_chat_history
 
 def reset_processing_lock():
     """重置处理锁状态"""
@@ -81,6 +91,23 @@ def display_chat_interface():
     
     # 分隔线
     st.markdown("---")
+
+    # 查询索引就绪状态，避免未建索引就开始对话
+    status = get_system_status()
+    chunk_ready = status.get("chunk_vector_index_exists", False)
+    entity_ready = status.get("entity_vector_index_exists", False)
+    chat_disabled = not (chunk_ready and entity_ready)
+
+    status_msg = (
+        f"Chunk索引: {'✅' if chunk_ready else '❌'}，"
+        f"实体索引: {'✅' if entity_ready else '❌'}，"
+        f"Chunks: {status.get('chunk_count', 0)}，Entities: {status.get('entity_count', 0)}"
+    ) if status else "无法获取索引状态"
+
+    if chat_disabled:
+        st.warning(f"索引未就绪，暂不可对话。{status_msg}")
+    else:
+        st.info(f"索引就绪：{status_msg}")
     
     # 如果当前有正在处理的请求，显示警告
     if st.session_state.processing_lock:
@@ -314,8 +341,30 @@ def display_chat_interface():
                                         st.session_state.current_tab = "知识图谱"  # 自动切换到知识图谱标签
                                         st.rerun()
         
-        # 处理新消息
-        if prompt := st.chat_input("请输入您的问题...", key="chat_input"):
+    # 处理示例问题的自动填充
+    prompt = None
+    if "example_question" in st.session_state:
+        prompt = st.session_state.example_question
+        del st.session_state.example_question
+
+    # 处理新消息
+    if not prompt and not chat_disabled:
+        prompt = st.chat_input(
+            key="chat_input",
+            disabled=False,
+            placeholder="请输入您的问题...",
+        )
+    elif chat_disabled:
+        st.chat_input(
+            key="chat_input",
+            disabled=True,
+            placeholder="索引未就绪，无法输入",
+        )
+
+    if chat_disabled:
+        return
+
+    if prompt:
             # 检查是否有正在处理的请求
             if "processing_lock" not in st.session_state:
                 st.session_state.processing_lock = False
@@ -329,6 +378,8 @@ def display_chat_interface():
             with st.chat_message("user"):
                 st.write(prompt)
             st.session_state.messages.append({"role": "user", "content": prompt})
+            # 保存对话历史
+            save_chat_history(st.session_state.session_id, st.session_state.messages)
             
             with st.chat_message("assistant"):
                 try:
@@ -447,7 +498,9 @@ def display_chat_interface():
                     
                     # 添加到会话状态
                     st.session_state.messages.append(message_obj)
-                        
+                    # 保存对话历史
+                    save_chat_history(st.session_state.session_id, st.session_state.messages)
+
                     # 从回答中提取知识图谱数据，deep_research_agent禁用此功能
                     if st.session_state.debug_mode and st.session_state.agent_type != "deep_research_agent":
                         with st.spinner("提取知识图谱数据..."):

@@ -1,0 +1,92 @@
+{
+  "description": "GraphRAG 评估黄金测试集",
+  "version": "1.0.0",
+  "created_at": "2025-01-13",
+  "test_cases": [
+    {
+      "id": "Q001",
+      "question": "旷课多少学时会被退学？",
+      "ground_truth": "学生无故旷课累计达到或超过某一学期总学时的三分之一，或一学年累计达到或超过应修总学时的四分之一时，学校可给予退学处理。",
+      "category": "factual",
+      "difficulty": "easy"
+    },
+    {
+      "id": "Q002",
+      "question": "国家奖学金的申请条件是什么？",
+      "ground_truth": "国家奖学金的申请条件包括：1) 学习成绩优异，2) 社会实践、创新能力、综合素质等方面表现突出，3) 无违纪处分记录。",
+      "category": "factual",
+      "difficulty": "medium"
+    },
+    {
+      "id": "Q003",
+      "question": "学生可以申请哪些类型的奖学金？",
+      "ground_truth": "学生可以申请国家奖学金、国家励志奖学金、校级奖学金等多种类型的奖学金。具体包括：国家奖学金面向成绩优异的学生，国家励志奖学金面向品学兼优的家庭经济困难学生，校级奖学金根据学校具体规定设立。",
+      "category": "multi-hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": "Q004",
+      "question": "旷课和国家奖学金之间有什么关系？",
+      "ground_truth": "旷课会影响学生的学习成绩和综合表现，可能导致无法满足国家奖学金的申请条件。严重旷课（如达到退学标准）会直接取消奖学金申请资格。",
+      "category": "reasoning",
+      "difficulty": "hard"
+    },
+    {
+      "id": "Q005",
+      "question": "学生违纪处分有哪些类型？",
+      "ground_truth": "学生违纪处分通常包括：警告、严重警告、记过、留校察看、开除学籍等几个等级。",
+      "category": "factual",
+      "difficulty": "easy"
+    },
+    {
+      "id": "Q006",
+      "question": "如何申请国家励志奖学金？",
+      "ground_truth": "申请国家励志奖学金需要：1) 符合家庭经济困难学生认定条件，2) 学习成绩优良，3) 提交申请材料，4) 经过班级推荐、学院审核、学校审批等程序。",
+      "category": "multi-hop",
+      "difficulty": "medium"
+    },
+    {
+      "id": "Q007",
+      "question": "学生申诉的流程是什么？",
+      "ground_truth": "学生对处分决定有异议时，可以在收到处分决定书之日起10日内向学校学生申诉处理委员会提出书面申诉。申诉委员会应在接到申诉后15个工作日内作出复查结论。",
+      "category": "factual",
+      "difficulty": "medium"
+    },
+    {
+      "id": "Q008",
+      "question": "比较国家奖学金和国家励志奖学金的区别",
+      "ground_truth": "国家奖学金和国家励志奖学金的主要区别在于：1) 申请对象不同：国家奖学金面向所有成绩优异的学生，国家励志奖学金面向家庭经济困难的优秀学生；2) 金额不同：国家奖学金通常金额更高；3) 评选条件：国家奖学金更注重综合表现，国家励志奖学金需要经济困难认定。",
+      "category": "comparison",
+      "difficulty": "hard"
+    },
+    {
+      "id": "Q009",
+      "question": "学生参加学生会对申请奖学金有帮助吗？",
+      "ground_truth": "学生参加学生会等社会实践活动对申请奖学金有积极作用。这些活动可以体现学生的综合素质、领导能力和社会责任感，是国家奖学金等评选中的重要加分项。",
+      "category": "reasoning",
+      "difficulty": "medium"
+    },
+    {
+      "id": "Q010",
+      "question": "学生转专业后奖学金申请有什么变化？",
+      "ground_truth": "学生转专业后，奖学金申请通常按照新专业的规定执行。需要重新了解新专业的奖学金政策、评选标准和申请流程。已获得的奖学金一般不受影响，但后续申请需符合新专业要求。",
+      "category": "reasoning",
+      "difficulty": "hard"
+    }
+  ],
+  "metadata": {
+    "total_questions": 10,
+    "categories": {
+      "factual": 3,
+      "multi-hop": 2,
+      "reasoning": 3,
+      "comparison": 1,
+      "aggregation": 1
+    },
+    "difficulty_distribution": {
+      "easy": 2,
+      "medium": 5,
+      "hard": 3
+    }
+  }
+}

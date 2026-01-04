@@ -1,4 +1,4 @@
-from typing import List, Dict, AsyncGenerator, Optional
+from typing import List, Dict, AsyncGenerator, Optional, Any
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -16,6 +16,7 @@ from graphrag_agent.search.tool.deeper_research_tool import DeeperResearchTool
 from graphrag_agent.search.tool.deep_research_tool import DeepResearchTool 
 
 from graphrag_agent.agents.base import BaseAgent
+from graphrag_agent.utils.retrieval_normalize import normalize_retrieval_output
 
 
 class DeepResearchAgent(BaseAgent):
@@ -129,10 +130,11 @@ class DeepResearchAgent(BaseAgent):
         
         # 安全地获取问题和检索结果
         try:
-            # 原始问题在倒数第三个消息
-            question = messages[-3].content if len(messages) >= 3 else "未找到问题"
-            # 检索结果在最后一个消息
-            retrieval_result = messages[-1].content if messages[-1] else "未找到相关信息"
+            raw_question = messages[-3] if len(messages) >= 3 else None
+            raw_retrieval = messages[-1] if messages else None
+            # 规范化为字符串，防止后续 prompt 拼接报类型错误
+            question = normalize_retrieval_output(raw_question) or "未找到问题"
+            retrieval_result = normalize_retrieval_output(raw_retrieval) or "未找到相关信息"
         except Exception as e:
             return {"messages": [AIMessage(content=f"生成回答时出错: {str(e)}")]}
 
@@ -158,10 +160,12 @@ class DeepResearchAgent(BaseAgent):
             return {"messages": [AIMessage(content=cached_result)]}
 
         # 处理流式输出的情况 - 生成器或字典结果
-        if isinstance(retrieval_result, (AsyncGenerator, Dict)) and not isinstance(retrieval_result, str):
+        raw_retrieval = locals().get("raw_retrieval")
+
+        if isinstance(raw_retrieval, (AsyncGenerator, Dict)) and not isinstance(raw_retrieval, str):
             # 如果结果是字典且包含'answer'字段，提取答案
-            if isinstance(retrieval_result, dict) and 'answer' in retrieval_result:
-                answer = retrieval_result['answer']
+            if isinstance(raw_retrieval, dict) and 'answer' in raw_retrieval:
+                answer = raw_retrieval['answer']
                 # 根据结果结构处理
                 if '<think>' in answer and '</think>' in answer:
                     # 包含思考过程，提取干净的答案
@@ -224,18 +228,19 @@ class DeepResearchAgent(BaseAgent):
             error_msg = f"处理思考过程时出错: {str(e)}"
             return {"messages": [AIMessage(content=error_msg)]}
     
-    def ask(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None, 
-            show_thinking: bool = False, exploration_mode: bool = False):
+    def ask(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None,
+            show_thinking: bool = False, exploration_mode: bool = False, **kwargs):
         """
         向Agent提问，可选显示思考过程
-        
+
         参数:
             query: 用户问题
             thread_id: 会话ID
             recursion_limit: 递归限制
             show_thinking: 是否显示思考过程
             exploration_mode: 是否使用知识图谱探索模式
-                
+            **kwargs: 额外参数，用于支持灵活的接口调用
+
         返回:
             str: 生成的回答或包含思考过程的字典
         """
@@ -256,14 +261,15 @@ class DeepResearchAgent(BaseAgent):
             # 重置状态
             self.show_thinking = old_thinking
     
-    def ask_with_thinking(self, query: str, thread_id: str = "default", community_aware: bool = True):
+    def ask_with_thinking(self, query: str, thread_id: str = "default", community_aware: bool = True, **kwargs):
         """
         提问并返回带思考过程的答案
-        
+
         参数:
             query: 用户问题
             thread_id: 会话ID
             community_aware: 是否启用社区感知
+            **kwargs: 额外参数，用于支持灵活的接口调用
             
         返回:
             dict: 包含思考过程和答案的字典
@@ -294,17 +300,18 @@ class DeepResearchAgent(BaseAgent):
                 
             return result
     
-    async def ask_stream(self, query: str, thread_id: str = "default", 
-                         recursion_limit: Optional[int] = None, show_thinking: bool = False) -> AsyncGenerator[str, None]:
+    async def ask_stream(self, query: str, thread_id: str = "default",
+                         recursion_limit: Optional[int] = None, show_thinking: bool = False, **kwargs) -> AsyncGenerator[str, None]:
         """
         向Agent提问，返回流式响应
-        
+
         参数:
             query: 用户问题
             thread_id: 会话ID
             recursion_limit: 递归限制
             show_thinking: 是否显示思考过程
-            
+            **kwargs: 额外参数，用于支持灵活的接口调用
+
         返回:
             AsyncGenerator: 流式响应内容
         """
@@ -580,26 +587,26 @@ class DeepResearchAgent(BaseAgent):
     def is_deeper_tool(self, use_deeper=True):
         """
         切换是否使用增强版研究工具
-        
+
         参数:
             use_deeper: 是否使用增强版
-            
+
         返回:
             str: 状态消息
         """
         # 切换工具
         self.use_deeper_tool = use_deeper
-        
+
         if use_deeper:
             # 切换到增强版
             try:
                 self.research_tool = DeeperResearchTool()
-                
+
                 # 加载额外工具
                 self.exploration_tool = self.research_tool.get_exploration_tool()
                 self.reasoning_analysis_tool = self.research_tool.get_reasoning_analysis_tool()
                 self.stream_tool = self.research_tool.get_stream_tool()
-                
+
                 # 重新设置工具
                 self._tools = self._setup_tools()
                 return "已切换到增强版研究工具，启用知识图谱探索和推理链分析功能"
@@ -617,7 +624,31 @@ class DeepResearchAgent(BaseAgent):
             # 重新设置工具
             self._tools = self._setup_tools()
             return "已切换到标准版研究工具，部分高级功能将不可用"
-            
+
+    def configure(self, config: Dict[str, Any]) -> None:
+        """
+        配置DeepResearchAgent的运行时参数（重写父类方法）
+
+        Args:
+            config: 配置字典，支持：
+                - use_deeper_tool: bool - 是否使用增强版研究工具
+                - show_thinking: bool - 是否显示思考过程
+        """
+        if "use_deeper_tool" in config:
+            self.is_deeper_tool(config["use_deeper_tool"])
+
+        if "show_thinking" in config:
+            self.show_thinking = config["show_thinking"]
+
+    def supports_kg_extraction(self) -> bool:
+        """
+        DeepResearchAgent不支持知识图谱数据提取（重写父类方法）
+
+        Returns:
+            bool: False - 深度研究Agent禁用KG提取
+        """
+        return False
+
     def close(self):
         """关闭资源"""
         # 调用父类方法

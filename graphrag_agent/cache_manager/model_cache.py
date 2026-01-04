@@ -1,6 +1,8 @@
 """
 模型缓存管理模块，用于预加载和管理模型缓存
 """
+import os
+ENABLE_MODEL_CACHE_PRELOAD = os.getenv("ENABLE_MODEL_CACHE_PRELOAD", "0") == "1"
 
 from typing import List, Optional
 
@@ -60,12 +62,14 @@ def preload_cache_embedding_model() -> None:
 
 
 def initialize_model_cache() -> None:
-    """初始化模型缓存，预加载配置的模型"""
-    # 确保缓存目录存在
-    cache_dir = ensure_model_cache_dir()
+    """初始化模型缓存（默认不预加载，避免在主链路引入 sentence_transformers/torch）"""
+    if not ENABLE_MODEL_CACHE_PRELOAD:
+        # 默认禁用预加载，避免在 Mac 上引入 torch 导致 segfault 风险
+        return
 
-    # 预加载缓存使用的嵌入模型
+    ensure_model_cache_dir()
     preload_cache_embedding_model()
+
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 from typing import Annotated, Sequence, TypedDict, List, Dict, Any, AsyncGenerator, Optional
 from abc import ABC, abstractmethod
+import json
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph import END, StateGraph, START
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -17,6 +18,7 @@ from graphrag_agent.cache_manager.manager import (
 )
 from graphrag_agent.cache_manager.strategies.global_strategy import GlobalCacheKeyStrategy
 from graphrag_agent.config.settings import AGENT_SETTINGS
+from graphrag_agent.utils.retrieval_normalize import normalize_retrieval_output
 
 class BaseAgent(ABC):
     """Agent 基类，定义通用功能和接口"""
@@ -72,7 +74,28 @@ class BaseAgent(ABC):
         
         # 设置工作流图
         self._setup_graph()
-    
+
+    @staticmethod
+    def _extract_tool_text(result: Any) -> str:
+        """从工具返回中提取文本，保证ToolMessage接收字符串。"""
+        if isinstance(result, dict):
+            for key in ("answer", "final_answer", "response", "output", "summary"):
+                value = result.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value
+            intermediate = result.get("intermediate_results")
+            if isinstance(intermediate, list):
+                return "\n".join(str(item) for item in intermediate)
+            try:
+                return json.dumps(result, ensure_ascii=False)
+            except Exception:
+                return str(result)
+        if isinstance(result, list):
+            return "\n".join(str(item) for item in result)
+        if result is None:
+            return ""
+        return str(result)
+
     @abstractmethod
     def _setup_tools(self) -> List:
         """设置工具，子类必须实现"""
@@ -127,7 +150,7 @@ class BaseAgent(ABC):
         """
         # 获取消息
         messages = inputs.get("messages", [])
-        query = messages[-1].content if messages else ""
+        query = normalize_retrieval_output(messages[-1] if messages else None)
         
         # 构建状态字典
         state = {
@@ -141,7 +164,15 @@ class BaseAgent(ABC):
         if "messages" in result and result["messages"]:
             message = result["messages"][0]
             content = message.content if hasattr(message, "content") else str(message)
-            
+
+            # 确保 content 是字符串类型
+            if isinstance(content, dict):
+                # 如果是字典，尝试提取答案字段
+                content = content.get('answer', str(content))
+            elif not isinstance(content, str):
+                # 如果不是字符串也不是字典，转换为字符串
+                content = str(content)
+
             # 按句子或段落分块，更自然
             import re
             chunks = re.split(r'([.!?。！？]\s*)', content)
@@ -195,7 +226,7 @@ class BaseAgent(ABC):
         
         # 提取关键词优化查询
         if len(messages) > 0 and isinstance(messages[-1], HumanMessage):
-            query = messages[-1].content
+            query = normalize_retrieval_output(messages[-1])
             keywords = self._extract_keywords(query)
             
             # 记录关键词
@@ -456,8 +487,16 @@ class BaseAgent(ABC):
                 "execution_log": self.execution_log + [{"node": "error", "timestamp": time.time(), "input": query, "output": str(e)}]
             }
         
-    def ask(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None):
-        """向Agent提问"""
+    def ask(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None, **kwargs):
+        """
+        向Agent提问
+
+        参数:
+            query: 用户问题
+            thread_id: 会话ID
+            recursion_limit: 递归限制
+            **kwargs: 额外参数（如 show_thinking 等），用于支持灵活的接口调用
+        """
         overall_start = time.time()
         
         # 确保查询字符串是干净的
@@ -514,15 +553,16 @@ class BaseAgent(ABC):
             print(f"处理查询时出错: {e} ({error_time:.4f}s)")
             return f"抱歉，处理您的问题时遇到了错误。请稍后再试或换一种提问方式。错误详情: {str(e)}"
     
-    async def ask_stream(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None) -> AsyncGenerator[str, None]:
+    async def ask_stream(self, query: str, thread_id: str = "default", recursion_limit: Optional[int] = None, **kwargs) -> AsyncGenerator[str, None]:
         """
         向Agent提问，返回流式响应
-        
+
         参数:
             query: 用户问题
             thread_id: 会话ID
             recursion_limit: 递归限制
-                
+            **kwargs: 额外参数（如 show_thinking 等），用于支持灵活的接口调用
+
         返回:
             AsyncGenerator[str, None]: 流式响应生成器
         """
@@ -534,20 +574,28 @@ class BaseAgent(ABC):
         # 首先尝试全局缓存（跨会话缓存）
         global_result = self.global_cache_manager.get(safe_query)
         if global_result:
+            # 确保结果是字符串类型
+            if isinstance(global_result, dict):
+                # 如果是字典，尝试提取答案字段
+                global_result = global_result.get('answer', str(global_result))
+            elif not isinstance(global_result, str):
+                # 如果不是字符串也不是字典，转换为字符串
+                global_result = str(global_result)
+
             # 对于缓存响应，按自然语言单位分块返回
             import re
             chunks = re.split(r'([.!?。！？]\s*)', global_result)
             buffer = ""
-            
+
             for i in range(0, len(chunks)):
                 buffer += chunks[i]
-                
+
                 # 当缓冲区包含完整句子或达到合理大小时输出
                 if (i % 2 == 1) or len(buffer) >= self.stream_flush_threshold:
                     yield buffer
                     buffer = ""
                     await asyncio.sleep(0.01)
-            
+
             # 输出任何剩余内容
             if buffer:
                 yield buffer
@@ -556,24 +604,32 @@ class BaseAgent(ABC):
         # 首先尝试快速路径 - 跳过验证的高质量缓存
         fast_result = self.check_fast_cache(safe_query, thread_id)
         if fast_result:
+            # 确保结果是字符串类型
+            if isinstance(fast_result, dict):
+                # 如果是字典，尝试提取答案字段
+                fast_result = fast_result.get('answer', str(fast_result))
+            elif not isinstance(fast_result, str):
+                # 如果不是字符串也不是字典，转换为字符串
+                fast_result = str(fast_result)
+
             # 对于缓存响应，按自然语言单位分块返回
             import re
             chunks = re.split(r'([.!?。！？]\s*)', fast_result)
             buffer = ""
-            
+
             for i in range(0, len(chunks)):
                 buffer += chunks[i]
-                
+
                 # 当缓冲区包含完整句子或达到合理大小时输出
                 if (i % 2 == 1) or len(buffer) >= self.stream_flush_threshold:
                     yield buffer
                     buffer = ""
                     await asyncio.sleep(0.01)
-            
+
             # 输出任何剩余内容
             if buffer:
                 yield buffer
-                
+
             # 将命中的内容同步到全局缓存
             self.global_cache_manager.set(safe_query, fast_result)
             return
@@ -582,26 +638,34 @@ class BaseAgent(ABC):
         cache_start = time.time()
         cached_response = self.cache_manager.get(safe_query, thread_id=thread_id)
         cache_time = time.time() - cache_start
-        
+
         if cached_response:
+            # 确保结果是字符串类型
+            if isinstance(cached_response, dict):
+                # 如果是字典，尝试提取答案字段
+                cached_response = cached_response.get('answer', str(cached_response))
+            elif not isinstance(cached_response, str):
+                # 如果不是字符串也不是字典，转换为字符串
+                cached_response = str(cached_response)
+
             # 同样按自然语言单位分块
             import re
             chunks = re.split(r'([.!?。！？]\s*)', cached_response)
             buffer = ""
-            
+
             for i in range(0, len(chunks)):
                 buffer += chunks[i]
-                
+
                 # 当缓冲区包含完整句子或达到合理大小时输出
                 if (i % 2 == 1) or len(buffer) >= self.stream_flush_threshold:
                     yield buffer
                     buffer = ""
                     await asyncio.sleep(0.01)
-            
+
             # 输出任何剩余内容
             if buffer:
                 yield buffer
-                
+
             # 将命中的内容同步到全局缓存
             self.global_cache_manager.set(safe_query, cached_response)
             return
@@ -768,13 +832,62 @@ class BaseAgent(ABC):
             return True
         
         return self.cache_manager.validate_answer(query, answer, validator, thread_id=thread_id)
-    
+
+    def configure(self, config: Dict[str, Any]) -> None:
+        """
+        配置Agent的运行时参数（多态接口）
+
+        默认实现不做任何操作，子类可以重写以处理特定配置
+
+        Args:
+            config: 配置字典，可能包含：
+                - use_deeper_tool: bool
+                - show_thinking: bool
+                - 其他Agent特定参数
+        """
+        pass
+
+    def ask_with_thinking(self, query: str, thread_id: str = "default", **kwargs) -> Dict:
+        """
+        提问并返回带思考过程的答案（多态接口）
+
+        默认实现简单调用 ask_with_trace()
+        子类可以重写以提供更详细的思考过程
+
+        Args:
+            query: 用户问题
+            thread_id: 会话ID
+            **kwargs: 额外参数，用于支持灵活的接口调用
+
+        Returns:
+            Dict: 包含答案和相关信息的字典
+        """
+        result = self.ask_with_trace(query, thread_id)
+        return {
+            "answer": result.get("answer", ""),
+            "thinking_process": "",
+            "retrieved_info": [],
+            "reference": {},
+            "execution_logs": result.get("execution_log", [])
+        }
+
+    def supports_kg_extraction(self) -> bool:
+        """
+        返回该Agent是否支持知识图谱数据提取（多态接口）
+
+        默认返回 True，子类可以重写以禁用KG提取
+
+        Returns:
+            bool: 是否支持KG提取
+        """
+        return True
+
     def close(self):
         """关闭资源"""
         # 确保所有延迟写入的缓存项都被保存
         if hasattr(self.cache_manager.storage, '_flush_write_queue'):
             self.cache_manager.storage._flush_write_queue()
-            
+
         # 同样确保全局缓存的写入被保存
         if hasattr(self.global_cache_manager.storage, '_flush_write_queue'):
             self.global_cache_manager.storage._flush_write_queue()

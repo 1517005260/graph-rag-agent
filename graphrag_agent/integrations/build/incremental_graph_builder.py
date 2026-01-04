@@ -246,8 +246,32 @@ class IncrementalGraphUpdater:
                                 for i, content in enumerate(processed_contents):
                                     if len(content) > 3:
                                         entity_data = content[3]
-                                        entity_count = sum(1 for data in entity_data if '("entity"' in str(data))
-                                        relation_count = sum(1 for data in entity_data if '("relationship"' in str(data))
+
+                                        # 支持新的 dict 格式和旧的字符串格式
+                                        entity_count = 0
+                                        relation_count = 0
+
+                                        for data in entity_data:
+                                            if isinstance(data, dict):
+                                                # 新格式：dict
+                                                entities = data.get("entities", [])
+                                                if not isinstance(entities, list):
+                                                    entities = []
+                                                entity_count += len(entities)
+
+                                                relations = data.get("relations", [])
+                                                if not relations or not isinstance(relations, list):
+                                                    relations = data.get("relationships", [])
+                                                if not isinstance(relations, list):
+                                                    relations = []
+                                                relation_count += len(relations)
+                                            else:
+                                                # 旧格式：字符串
+                                                if '("entity"' in str(data):
+                                                    entity_count += 1
+                                                if '("relationship"' in str(data):
+                                                    relation_count += 1
+
                                         self.console.print(f"[blue]文件 {i+1}: {content[0]}, 抽取了 {entity_count} 个实体和 {relation_count} 个关系[/blue]")
                                     else:
                                         self.console.print(f"[yellow]文件 {i+1}: {content[0]}, 没有返回实体数据[/yellow]")
@@ -264,11 +288,33 @@ class IncrementalGraphUpdater:
                                                 break
                                         
                                         if entity_data:
-                                            # 估算实体和关系数量
-                                            entity_count = sum(1 for data in entity_data if '("entity"' in str(data))
-                                            relation_count = sum(1 for data in entity_data if '("relationship"' in str(data))
+                                            # 估算实体和关系数量（支持新的 dict 格式和旧的字符串格式）
+                                            entity_count = 0
+                                            relation_count = 0
+
+                                            for data in entity_data:
+                                                if isinstance(data, dict):
+                                                    # 新格式：dict
+                                                    entities = data.get("entities", [])
+                                                    if not isinstance(entities, list):
+                                                        entities = []
+                                                    entity_count += len(entities)
+
+                                                    relations = data.get("relations", [])
+                                                    if not relations or not isinstance(relations, list):
+                                                        relations = data.get("relationships", [])
+                                                    if not isinstance(relations, list):
+                                                        relations = []
+                                                    relation_count += len(relations)
+                                                else:
+                                                    # 旧格式：字符串
+                                                    if '("entity"' in str(data):
+                                                        entity_count += 1
+                                                    if '("relationship"' in str(data):
+                                                        relation_count += 1
+
                                             self.console.print(f"[green]文件 {doc['filename']} 中识别出 {entity_count} 个实体和 {relation_count} 个关系[/green]")
-                                            
+
                                             # 添加到写入数据
                                             graph_writer_data.append([
                                                 doc["filename"],
@@ -277,7 +323,7 @@ class IncrementalGraphUpdater:
                                                 doc["graph_result"],
                                                 entity_data
                                             ])
-                                            
+
                                             # 更新统计
                                             results["entities_extracted"] += entity_count
                                             results["relations_created"] += relation_count

@@ -409,13 +409,22 @@ response = requests.post(
 ## 启动前后端服务
 
 ```bash
+# 启动 Neo4j（Docker）
+docker compose up -d neo4j
+# 或单独启动：docker run -d --name neo4j -p7474:7474 -p7687:7687 -e NEO4J_AUTH=neo4j/test neo4j:5
+
+# 准备 Python 环境
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e .
+cp .env.example .env  # 填写 OpenAI/Neo4j 配置，确保索引名一致
+
 # 启动后端
-cd graph-rag-agent/
-python server/main.py
+uvicorn server.main:app --reload --host 0.0.0.0 --port 8000
+# 用 GET /status 检查索引是否就绪
 
 # 启动前端
-cd graph-rag-agent/
-streamlit run frontend/app.py
+streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
 ```
 
 **注意**：由于langchain版本问题，目前的流式是伪流式实现，即先完整生成答案，再分段返回。

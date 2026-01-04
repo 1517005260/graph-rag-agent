@@ -1,15 +1,16 @@
-from langchain_openai import OpenAIEmbeddings
+import os
+from typing import Optional
+
 from langchain_openai import ChatOpenAI
+from langchain_openai import OpenAIEmbeddings
 from langchain.callbacks.streaming_aiter import AsyncIteratorCallbackHandler
 from langchain.callbacks.manager import AsyncCallbackManager
-
-
-import os
 
 from graphrag_agent.config.settings import (
     TIKTOKEN_CACHE_DIR,
     OPENAI_EMBEDDING_CONFIG,
     OPENAI_LLM_CONFIG,
+    EMBEDDING_DIM,
 )
 
 
@@ -21,14 +22,24 @@ def setup_cache():
 
 setup_cache()
 
+
 def get_embeddings_model():
+    _validate_embedding_dimension(OPENAI_EMBEDDING_CONFIG.get("model"))
+
     config = {k: v for k, v in OPENAI_EMBEDDING_CONFIG.items() if v}
+    configured_dim = config.get("dimensions")
+    if configured_dim is not None and int(configured_dim) != int(EMBEDDING_DIM):
+        raise ValueError(
+            f"OPENAI_EMBEDDINGS_MODEL 的维度 {configured_dim} 与 EMBEDDING_DIM="
+            f"{EMBEDDING_DIM} 不一致，请更新配置或 .env。"
+        )
     return OpenAIEmbeddings(**config)
 
 
 def get_llm_model():
     config = {k: v for k, v in OPENAI_LLM_CONFIG.items() if v is not None and v != ""}
     return ChatOpenAI(**config)
+
 
 def get_stream_llm_model():
     callback_handler = AsyncIteratorCallbackHandler()
@@ -38,6 +49,7 @@ def get_stream_llm_model():
     config = {k: v for k, v in OPENAI_LLM_CONFIG.items() if v is not None and v != ""}
     config.update({"streaming": True, "callbacks": manager})
     return ChatOpenAI(**config)
+
 
 def count_tokens(text):
     """简单通用的token计数"""
@@ -68,6 +80,35 @@ def count_tokens(text):
     chinese = len([c for c in text if '\u4e00' <= c <= '\u9fff'])
     english = len(text) - chinese
     return chinese + english // 4
+
+
+_EXPECTED_EMBEDDING_DIMENSIONS = {
+    "text-embedding-3-large": 1536,
+    "text-embedding-3-small": 512,
+    "text-embedding-ada-002": 1536,
+}
+
+
+def _validate_embedding_dimension(model_name: Optional[str]) -> None:
+    """
+    Ensure EMBEDDING_DIM matches the selected embedding model.
+
+    Args:
+        model_name: Embedding model configured for OpenAI embeddings.
+    """
+    if not model_name:
+        return
+
+    expected_dimension = _EXPECTED_EMBEDDING_DIMENSIONS.get(model_name)
+    if expected_dimension is None:
+        return
+
+    if int(expected_dimension) != int(EMBEDDING_DIM):
+        raise ValueError(
+            f"配置的 EMBEDDING_DIM={EMBEDDING_DIM} 与模型 {model_name} 的"
+            f" 维度 {expected_dimension} 不一致，请同步更新配置或 .env。"
+        )
+
 
 if __name__ == '__main__':
     # 测试llm

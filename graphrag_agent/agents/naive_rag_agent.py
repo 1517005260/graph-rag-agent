@@ -9,6 +9,7 @@ from graphrag_agent.config.prompts import NAIVE_PROMPT, NAIVE_RAG_HUMAN_PROMPT
 from graphrag_agent.config.settings import response_type
 from graphrag_agent.search.tool.naive_search_tool import NaiveSearchTool
 from graphrag_agent.agents.base import BaseAgent
+from graphrag_agent.utils.retrieval_normalize import normalize_retrieval_output
 
 
 class NaiveRagAgent(BaseAgent):
@@ -54,12 +55,18 @@ class NaiveRagAgent(BaseAgent):
         
         # 安全地获取问题和检索结果
         try:
-            question = messages[-3].content if len(messages) >= 3 else "未找到问题"
+            question = normalize_retrieval_output(
+                messages[-3] if len(messages) >= 3 else None
+            )
+            if not question:
+                question = "未找到问题"
         except Exception:
             question = "无法获取问题"
             
         try:
-            docs = messages[-1].content if messages[-1] else "未找到相关信息"
+            docs = normalize_retrieval_output(messages[-1] if messages else None)
+            if not docs:
+                docs = "未找到相关信息"
         except Exception:
             docs = "无法获取检索结果"
 
@@ -128,7 +135,13 @@ class NaiveRagAgent(BaseAgent):
         
         try:
             # 执行Naive搜索
+            search_tool = self.search_tool.get_tool()
             search_result = self.search_tool.search(query)
+            # ✅ 兼容标准化响应(dict) 与旧版(str)
+            if isinstance(search_result, dict):
+               search_result = search_result.get("answer", "") or ""
+            else:
+               search_result = str(search_result) if search_result is not None else ""
             
             # 分块返回结果
             if search_result:

@@ -1,28 +1,57 @@
-import hanlp
+"""
+ChineseTextChunker (离线安全版 / 避免 import-time 重依赖)
+- 绝不在模块 import 阶段导入 settings / hanlp / torch
+- 默认使用本地简单分词
+- 如需 HanLP，必须显式开启环境变量 ENABLE_HANLP=1，并且在 __init__ 内部按需 import
+"""
+import os
 import re
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
-from graphrag_agent.config.settings import CHUNK_SIZE, OVERLAP, MAX_TEXT_LENGTH
 
 class ChineseTextChunker:
-    """中文文本分块器，将长文本分割成带有重叠的文本块"""
-    
-    def __init__(self, chunk_size: int = CHUNK_SIZE, overlap: int = OVERLAP, max_text_length: int = MAX_TEXT_LENGTH):
-        """
-        初始化分块器
-        
-        Args:
-            chunk_size: 每个文本块的目标大小（tokens数量）
-            overlap: 相邻文本块的重叠大小（tokens数量）
-            max_text_length: HanLP处理的最大文本长度，超过此长度将进行预分割
-        """
+    """中文文本分块器（默认离线简单分词；可选 HanLP）"""
+
+    def __init__(
+        self,
+        chunk_size: Optional[int] = None,
+        overlap: Optional[int] = None,
+        max_text_length: Optional[int] = None,
+    ):
+        # ✅ 延迟读取 settings，避免 import settings 时触发 sentence_transformers/torch 链
+        if chunk_size is None or overlap is None or max_text_length is None:
+            from graphrag_agent.config import settings as s  # 放这里！
+            chunk_size = chunk_size or s.CHUNK_SIZE
+            overlap = overlap or s.OVERLAP
+            max_text_length = max_text_length or s.MAX_TEXT_LENGTH
+
         if chunk_size <= overlap:
             raise ValueError("chunk_size必须大于overlap")
-            
-        self.chunk_size = chunk_size
-        self.overlap = overlap
-        self.max_text_length = max_text_length
-        self.tokenizer = hanlp.load(hanlp.pretrained.tok.COARSE_ELECTRA_SMALL_ZH)
+
+        self.chunk_size = int(chunk_size)
+        self.overlap = int(overlap)
+        self.max_text_length = int(max_text_length)
+
+        # ✅ 默认：绝对不碰 HanLP/torch
+        self.tokenizer = None
+        self.use_hanlp = False
+
+        enable_hanlp = os.getenv("ENABLE_HANLP", "0").strip() in ("1", "true", "True")
+        if enable_hanlp:
+            try:
+                import hanlp  # 放这里！按需 import
+                self.tokenizer = hanlp.load(hanlp.pretrained.tok.COARSE_ELECTRA_SMALL_ZH)
+                self.use_hanlp = True
+                print("✅ HanLP tokenizer enabled")
+            except Exception as e:
+                print(f"⚠️ HanLP 启用失败，回退到简单分词: {e}")
+                self.tokenizer = None
+                self.use_hanlp = False
+        else:
+            print("DEBUG: [TextChunker] 使用本地简单分词器 (Offline Mode)")
+
+    # 下面 chunk_text / _safe_tokenize / _simple_tokenize 等逻辑保持你现有实现即可
+
         
     def process_files(self, file_contents: List[Tuple[str, str]]) -> List[Tuple[str, str, List[List[str]]]]:
         """
@@ -165,10 +194,10 @@ class ChineseTextChunker:
     def _safe_tokenize(self, text: str) -> List[str]:
         """
         安全的分词方法，处理可能的异常
-        
+
         Args:
             text: 要分词的文本
-            
+
         Returns:
             分词结果列表
         """
@@ -176,11 +205,37 @@ class ChineseTextChunker:
             # 检查文本长度
             if len(text) > self.max_text_length:
                 return list(text)
-            
-            tokens = self.tokenizer(text)
-            return tokens if tokens else []
+
+            # 如果 HanLP 可用，使用 HanLP 分词
+            if self.use_hanlp and self.tokenizer is not None:
+                tokens = self.tokenizer(text)
+                return tokens if tokens else []
+            else:
+                # 简单分词：按字符分割，保留标点和空格作为独立token
+                return self._simple_tokenize(text)
         except Exception:
-            return list(text)
+            return self._simple_tokenize(text)
+
+    def _simple_tokenize(self, text: str) -> List[str]:
+        """
+        简单的分词方法，作为 HanLP 的后备方案
+        按字符分割，但尝试保持词的完整性
+
+        Args:
+            text: 要分词的文本
+
+        Returns:
+            分词结果列表
+        """
+        if not text:
+            return []
+
+        # 使用正则表达式进行简单分词
+        # 保留连续的字母、数字为一个token，中文字符单独成token
+        import re
+        tokens = re.findall(r'[a-zA-Z0-9]+|[\u4e00-\u9fff]|[^\w\s]|\s+', text)
+        # 过滤掉纯空白token
+        return [t for t in tokens if t.strip()]
         
     def chunk_text(self, text: str) -> List[List[str]]:
         """

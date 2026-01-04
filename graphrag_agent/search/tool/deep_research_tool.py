@@ -273,7 +273,27 @@ class DeepResearchTool(BaseSearchTool):
                                 "doc_id": doc_id,
                                 "title": f"Document: {doc_id}"
                             })
-                
+                elif isinstance(result, dict) and not chunk_ids:
+                    answer_text = (
+                        result.get("answer")
+                        or result.get("final_answer")
+                        or result.get("response")
+                    )
+                    if answer_text and len(str(answer_text)) > 10:
+                        text_value = str(answer_text)
+                        chunks.append({
+                            "chunk_id": "text_result",
+                            "text": text_value,
+                            "content_with_weight": text_value,
+                            "weight": 1.0,
+                            "docnm_kwd": "Document_text"
+                        })
+                        doc_aggs.append({
+                            "doc_id": "text",
+                            "title": "Document: text"
+                        })
+                        chunk_ids = ["text_result"]
+
                 # 如果原始结果是字符串且没有找到chunks，将整个文本作为一个chunk
                 elif isinstance(result, str) and len(result) > 10 and not chunks:
                     chunks.append({

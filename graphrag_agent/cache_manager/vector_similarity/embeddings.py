@@ -1,9 +1,12 @@
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import List, Union
-from sentence_transformers import SentenceTransformer
+# from sentence_transformers import SentenceTransformer
 import threading
 from pathlib import Path
+import os
+
+ENABLE_SENTENCE_TRANSFORMERS = os.getenv("ENABLE_SENTENCE_TRANSFORMERS", "0") == "1"
 
 from graphrag_agent.config.settings import (
     MODEL_CACHE_DIR,
@@ -106,6 +109,23 @@ class SentenceTransformerEmbedding(EmbeddingProvider):
         cache_path.mkdir(parents=True, exist_ok=True)
 
         # 加载模型，指定缓存目录
+        if not ENABLE_SENTENCE_TRANSFORMERS:
+            raise RuntimeError(
+                "SentenceTransformerEmbedding 被调用，但当前默认禁用了 sentence_transformers。"
+                "如确实需要本地向量模型，请先执行：\n"
+                "  export ENABLE_SENTENCE_TRANSFORMERS=1\n"
+                "并确保已正确安装 sentence-transformers/torch。\n"
+                "如果你只是跑 OpenAI embeddings（推荐），请设置：\n"
+                "  export CACHE_EMBEDDING_PROVIDER=openai\n"
+            )
+
+        try:
+            from sentence_transformers import SentenceTransformer  # noqa: WPS433 (local import)
+        except Exception as e:
+            raise RuntimeError(
+                f"无法导入 sentence_transformers（通常会引入 torch）。错误: {e}\n"
+                "如果你不需要本地 embedding，请保持 CACHE_EMBEDDING_PROVIDER=openai。"
+            ) from e
         self.model = SentenceTransformer(model_name, cache_folder=str(cache_path))
         self._dimension = None
         self._initialized = True
@@ -129,11 +149,22 @@ class SentenceTransformerEmbedding(EmbeddingProvider):
 
 def get_cache_embedding_provider() -> EmbeddingProvider:
     """根据配置获取缓存向量提供者"""
-    provider_type = CACHE_EMBEDDING_PROVIDER
+    provider_type = (CACHE_EMBEDDING_PROVIDER or "").lower()
 
-    if provider_type == 'openai':
+    if provider_type in ("openai", ""):
         return OpenAIEmbeddingProvider()
-    else:
-        # 使用sentence transformer
+
+    if provider_type in ("sentence_transformer", "sentence-transformer", "st"):
+        if not ENABLE_SENTENCE_TRANSFORMERS:
+            raise RuntimeError(
+                "CACHE_EMBEDDING_PROVIDER 配置为 sentence_transformer，但 ENABLE_SENTENCE_TRANSFORMERS 未开启。\n"
+                "请执行：export ENABLE_SENTENCE_TRANSFORMERS=1\n"
+                "或改回：export CACHE_EMBEDDING_PROVIDER=openai"
+            )
         model_name = CACHE_SENTENCE_TRANSFORMER_MODEL
         return SentenceTransformerEmbedding(model_name=model_name, cache_dir=MODEL_CACHE_DIR)
+
+    raise ValueError(
+        f"不支持的 CACHE_EMBEDDING_PROVIDER={provider_type}，可选：openai / sentence_transformer"
+    )
+

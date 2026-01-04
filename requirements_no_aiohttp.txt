@@ -1,0 +1,58 @@
+chardet==3.0.4 
+fastapi==0.115.11
+faiss-cpu==1.11.0
+google-auth==2.38.0
+graphdatascience==1.12
+hanlp==2.1.1
+httplib2==0.22.0
+jieba==0.42.1
+langchain==0.3.21
+langchain_community==0.3.20
+langchain_core==0.3.46
+langchain_neo4j==0.4.0
+langchain_openai==0.3.9
+langgraph==0.3.18
+langsmith==0.3.18
+lxml==5.3.1
+markdown>=3.4.1
+matplotlib==3.10.1
+numpy==1.26.2
+pandas==2.2.3
+psutil==5.9.7
+pydantic==2.10.6
+PyPDF2>=3.0.0
+python-docx>=0.8.11
+python-dotenv==1.0.1
+pyyaml>=6.0
+pyvis==0.3.2
+Requests==2.32.3
+rich==13.9.4
+schedule==1.2.2
+scikit-learn==1.6.1
+sentence_transformers==4.1.0
+setuptools==75.8.0
+shutup==0.2.0
+sseclient-py==1.7.2
+streamlit==1.42.2
+tqdm==4.66.3
+uvicorn==0.29.0
+
+# linux: sudo apt-get install python-dev-is-python3 libxml2-dev libxslt1-dev antiword unrtf poppler-utils
+textract==1.6.3
+
+# windows
+# pywin32>=302
+
+# 以下是GRPO训练所需的额外依赖， vllm在windows下不可用
+# unsloth==2025.3.19
+# unsloth_zoo==2025.3.17
+# trl==0.14.0
+# peft==0.15.1
+# transformers==4.49.0
+# torch==2.5.1
+# tiktoken==0.9.0
+# networkx==3.4.2
+# vllm==0.6.5
+# triton==3.1.0
+# regex==2024.11.6
+# tenacity==9.0.0

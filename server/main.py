@@ -1,3 +1,11 @@
+import sys
+from pathlib import Path
+
+# 添加项目根目录到 Python 路径，以便能找到 graphrag_agent 模块
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import uvicorn
 from fastapi import FastAPI
 from routers import api_router

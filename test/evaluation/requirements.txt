@@ -1,0 +1,19 @@
+# RAGAS 评估流水线依赖
+
+# RAGAS 框架
+ragas>=0.1.0
+
+# 数据集处理
+datasets>=2.14.0
+
+# 可选：更好的显示
+rich>=13.0.0
+
+# 可选：数据分析
+pandas>=2.0.0
+numpy>=1.24.0
+
+# 注意：以下依赖应该已经在主项目中安装
+# langchain>=0.1.0
+# langchain-openai>=0.0.5
+# openai>=1.0.0

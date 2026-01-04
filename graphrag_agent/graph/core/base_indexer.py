@@ -91,31 +91,42 @@ class BaseIndexer:
     
     def process_in_parallel(self, items: List[Any], process_func) -> List[Any]:
         """
-        并行处理项目
-        
+        并行处理项目（修复顺序错乱问题）
+
+        使用预分配列表 + 按索引填充的方式确保：
+        1. 结果顺序与输入 items 严格一致
+        2. 即使部分任务失败，列表长度也保持一致（失败位置为 None）
+
         Args:
-            items: 待处理项目列表  
+            items: 待处理项目列表
             process_func: 处理单个项目的函数
-            
+
         Returns:
-            List[Any]: 处理结果列表
+            List[Any]: 处理结果列表，顺序与 items 一致。如果某项处理失败，该位置为 None。
         """
+        if not items:
+            return []
+
         max_workers = min(self.max_workers, CONFIG_MAX_WORKERS)
-        results = []
-        
+        # 1. 预分配固定长度的列表，确保索引对齐
+        results = [None] * len(items)
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # 提交所有任务
-            future_to_item = {
-                executor.submit(process_func, item): i 
+            # 记录 Future -> Index 的映射
+            future_to_index = {
+                executor.submit(process_func, item): i
                 for i, item in enumerate(items)
             }
-            
-            # 收集结果
-            for future in concurrent.futures.as_completed(future_to_item):
+
+            for future in concurrent.futures.as_completed(future_to_index):
+                index = future_to_index[future]
                 try:
                     result = future.result()
-                    results.append(result)
+                    # 2. 按原始索引归位
+                    results[index] = result
                 except Exception as e:
-                    print(f"并行处理出错: {e}")
-        
+                    print(f"并行处理出错 (索引 {index}): {e}")
+                    # 出错时保留 None，确保列表长度不变
+                    results[index] = None
+
         return results

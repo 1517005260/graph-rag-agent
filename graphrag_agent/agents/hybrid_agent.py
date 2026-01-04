@@ -14,6 +14,7 @@ from graphrag_agent.config.settings import response_type
 from graphrag_agent.search.tool.hybrid_tool import HybridSearchTool
 
 from graphrag_agent.agents.base import BaseAgent
+from graphrag_agent.utils.retrieval_normalize import normalize_retrieval_output
 
 
 class HybridAgent(BaseAgent):
@@ -75,13 +76,17 @@ class HybridAgent(BaseAgent):
         
         # 安全地获取问题内容
         try:
-            question = messages[-3].content if len(messages) >= 3 else "未找到问题"
+            question = normalize_retrieval_output(messages[-3] if len(messages) >= 3 else None)
+            if not question:
+                question = "未找到问题"
         except Exception:
             question = "无法获取问题"
             
         # 安全地获取文档内容
         try:
-            docs = messages[-1].content if messages[-1] else "未找到相关信息"
+            docs = normalize_retrieval_output(messages[-1] if messages else None)
+            if not docs:
+                docs = "未找到相关信息"
         except Exception:
             docs = "无法获取检索结果"
 
@@ -359,15 +364,17 @@ class HybridAgent(BaseAgent):
             # 如果仍然没有查询，尝试使用最简单的提取
             if not query and hasattr(last_message, 'content'):
                 query = last_message.content
-                
+            
             # 执行搜索
-            tool_result = self.search_tool.search(query)
+            tool_runner = self.search_tool.get_tool()
+            tool_result = tool_runner._run(query)
+            tool_text = self._extract_tool_text(tool_result)
             
             # 返回正确格式的工具消息
             return {
                 "messages": [
                     ToolMessage(
-                        content=tool_result,
+                        content=tool_text,
                         tool_call_id=tool_id,
                         name=tool_name
                     )

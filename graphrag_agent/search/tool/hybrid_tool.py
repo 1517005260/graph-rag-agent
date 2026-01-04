@@ -24,6 +24,7 @@ from graphrag_agent.search.retrieval_adapter import (
     results_from_relationships,
     results_to_payload,
 )
+from graphrag_agent.search.response_models import ResponseBuilder, create_error_response
 
 
 class HybridSearchTool(BaseSearchTool):
@@ -193,7 +194,13 @@ class HybridSearchTool(BaseSearchTool):
         返回:
             List[str]: 实体ID列表
         """
-        return self.vector_search(query, limit)
+        return self.entity_vector_search(query, limit)
+
+    def _entity_vector_search(self, query: str, limit: int = 5) -> List[str]:
+        """
+        针对实体的向量搜索封装，便于后续扩展或区分索引
+        """
+        return self.entity_vector_search(query, limit)
 
     def _fallback_text_search(self, query: str, limit: int = 5) -> List[str]:
         """
@@ -228,6 +235,32 @@ class HybridSearchTool(BaseSearchTool):
         except Exception as e:
             print(f"文本搜索也失败: {e}")
             return []
+
+    def _build_references_from_payload(self, retrieval_payload: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+        """从标准化的检索结果payload中提取引用ID列表。"""
+        references = {
+            "chunks": set(),
+            "entities": set(),
+            "communities": set(),
+            "relationships": set(),
+        }
+
+        for item in retrieval_payload or []:
+            metadata = item.get("metadata", {}) if isinstance(item, dict) else {}
+            source_type = metadata.get("source_type")
+            source_id = metadata.get("source_id")
+            if not source_id:
+                continue
+            if source_type == "chunk":
+                references["chunks"].add(str(source_id))
+            elif source_type == "entity":
+                references["entities"].add(str(source_id))
+            elif source_type == "community":
+                references["communities"].add(str(source_id))
+            elif source_type == "relationship":
+                references["relationships"].add(str(source_id))
+
+        return {key: list(values) for key, values in references.items()}
     
     def _retrieve_low_level_content(self, query: str, keywords: List[str]) -> Tuple[str, List[RetrievalResult]]:
         """
@@ -524,7 +557,7 @@ class HybridSearchTool(BaseSearchTool):
         执行混合搜索，返回包含证据与答案的结构化结果。
         """
         overall_start = time.time()
-        
+
         # 解析输入
         if isinstance(query_input, dict) and "query" in query_input:
             query = query_input["query"]
@@ -537,85 +570,183 @@ class HybridSearchTool(BaseSearchTool):
             keywords = self.extract_keywords(query)
             low_keywords = keywords.get("low_level", [])
             high_keywords = keywords.get("high_level", [])
-        
-        # 检查缓存
+
         cache_key = query
         if low_keywords or high_keywords:
             cache_key = self.cache_manager.key_strategy.generate_key(
-                query, 
-                low_level_keywords=low_keywords, 
-                high_level_keywords=high_keywords
+                query,
+                low_level_keywords=low_keywords,
+                high_level_keywords=high_keywords,
             )
-            
+
         cached_result = self.cache_manager.get(cache_key)
         if isinstance(cached_result, dict):
-            return cached_result
-        
+            cached_copy = dict(cached_result)
+            cached_copy.setdefault("cache_hit", True)
+            cached_copy.setdefault("answer", cached_copy.get("final_answer", "未找到相关信息"))
+            cached_copy.setdefault("cache_key", cache_key)
+            return cached_copy
+        if isinstance(cached_result, str):
+            # 升级旧缓存的纯文本格式
+            upgraded = {
+                "query": query,
+                "low_level_content": "",
+                "high_level_content": "",
+                "answer": cached_result,
+                "final_answer": cached_result,
+                "retrieval_results": [],
+                "references": {"chunks": [], "entities": [], "communities": [], "relationships": []},
+                "timing": {},
+                "cache_hit": True,
+                "cache_key": cache_key,
+            }
+            self.cache_manager.set(cache_key, upgraded, low_level_keywords=low_keywords, high_level_keywords=high_keywords)
+            return upgraded
+
         try:
+            search_start = time.time()
             # 1. 检索低级内容（实体和关系）
             low_level_content, low_evidence = self._retrieve_low_level_content(query, low_keywords)
-            
+
             # 2. 检索高级内容（社区和主题）
             high_level_content, high_evidence = self._retrieve_high_level_content(query, high_keywords)
-            
+            search_time = time.time() - search_start
+            self.performance_metrics["query_time"] = search_time
+
             # 3. 生成最终答案
             llm_start = time.time()
-            
-            # 调用LLM生成最终答案
-            answer = self.query_chain.invoke({
-                "query": query,
-                "low_level": low_level_content,
-                "high_level": high_level_content,
-                "response_type": response_type
-            })
-            
-            self.performance_metrics["llm_time"] += time.time() - llm_start
-            
+
+            answer = self.query_chain.invoke(
+                {
+                    "query": query,
+                    "low_level": low_level_content,
+                    "high_level": high_level_content,
+                    "response_type": response_type,
+                }
+            )
+
+            llm_time = time.time() - llm_start
+            self.performance_metrics["llm_time"] = llm_time
+
             all_evidence = merge_retrieval_results(low_evidence, high_evidence)
+            retrieval_payload = results_to_payload(all_evidence)
+            references = self._build_references_from_payload(retrieval_payload)
+
+            total_time = time.time() - overall_start
+            self.performance_metrics["total_time"] = total_time
+
             structured_result = {
                 "query": query,
                 "low_level_content": low_level_content,
                 "high_level_content": high_level_content,
+                "answer": answer if answer else "未找到相关信息",
                 "final_answer": answer if answer else "未找到相关信息",
-                "retrieval_results": results_to_payload(all_evidence),
+                "retrieval_results": retrieval_payload,
+                "references": references,
+                "Chunks": references.get("chunks", []),
+                "Entities": references.get("entities", []),
+                "Relationships": references.get("relationships", []),
+                "Communities": references.get("communities", []),
+                "timing": {
+                    "search_time": search_time,
+                    "llm_time": llm_time,
+                    "total_time": total_time,
+                },
+                "cache_hit": False,
+                "cache_key": cache_key,
             }
-            
+
             # 缓存结果
             self.cache_manager.set(
-                cache_key, 
-                structured_result, 
+                cache_key,
+                structured_result,
                 low_level_keywords=low_keywords,
-                high_level_keywords=high_keywords
+                high_level_keywords=high_keywords,
             )
-            
-            self.performance_metrics["total_time"] = time.time() - overall_start
 
             return structured_result
-            
+
         except Exception as e:
             error_msg = f"搜索过程中出现错误: {str(e)}"
             print(error_msg)
+            self.performance_metrics["total_time"] = time.time() - overall_start
             return {
                 "query": query,
                 "low_level_content": "",
                 "high_level_content": "",
+                "answer": error_msg,
                 "final_answer": error_msg,
                 "retrieval_results": [],
+                "references": {"chunks": [], "entities": [], "communities": [], "relationships": []},
+                "timing": {"total_time": self.performance_metrics.get("total_time")},
+                "cache_hit": False,
                 "error": error_msg,
+                "cache_key": cache_key,
             }
     
-    def search(self, query_input: Any) -> str:
+    def search(self, query_input: Any) -> Dict[str, Any]:
         """
-        执行混合搜索，结合低级和高级内容
-        
-        参数:
-            query_input: 字符串查询或包含查询和关键词的字典
-            
-        返回:
-            str: 生成的最终答案
+        执行混合搜索并返回标准化的响应字典。
         """
-        structured = self.structured_search(query_input)
-        return structured.get("final_answer", "未找到相关信息")
+        try:
+            structured = self.structured_search(query_input)
+            references = structured.get("references") or self._build_references_from_payload(
+                structured.get("retrieval_results", [])
+            )
+            timing = structured.get("timing", {})
+            answer_text = structured.get("answer") or structured.get("final_answer") or "未找到相关信息"
+
+            builder = ResponseBuilder(retriever_name="hybrid_search")
+            builder.add_chunks(references.get("chunks", []))
+            builder.add_entities(references.get("entities", []))
+            builder.add_communities(references.get("communities", []))
+            builder.add_relationships(references.get("relationships", []))
+            builder.set_timing(
+                search_time=timing.get("search_time"),
+                llm_time=timing.get("llm_time"),
+                total_time=timing.get("total_time"),
+            )
+            builder.set_cache_hit(structured.get("cache_hit", False))
+
+            response = builder.build_dict(answer=answer_text)
+            response.update({
+                "query": structured.get("query"),
+                "low_level_content": structured.get("low_level_content"),
+                "high_level_content": structured.get("high_level_content"),
+                "retrieval_results": structured.get("retrieval_results", []),
+                "references": references,
+                "timing": timing,
+                "final_answer": answer_text,
+            })
+
+            cache_key = structured.get("cache_key") or structured.get("query")
+            if cache_key:
+                self.cache_manager.set(f"{cache_key}::response", response)
+
+            return response
+        except Exception as e:
+            error_msg = f"混合搜索失败: {e}"
+            return create_error_response("hybrid_search", error_msg)
+
+    def get_tool(self) -> BaseTool:
+        """返回仅输出answer字段的混合检索工具。"""
+        outer = self
+
+        class HybridRetrievalTool(BaseTool):
+            name: str = "hybrid_retriever"
+            description: str = "混合检索工具：结合局部细节和全局主题的搜索。"
+
+            def _run(self_tool, query: Any) -> str:
+                response = outer.search(query)
+                self_tool.last_response = response
+                if isinstance(response, dict):
+                    return response.get("answer") or response.get("final_answer") or "未找到相关信息"
+                return str(response)
+
+            def _arun(self_tool, query: Any) -> str:
+                raise NotImplementedError("异步执行未实现")
+
+        return HybridRetrievalTool()
     
     def get_global_tool(self) -> BaseTool:
         """
@@ -649,7 +780,11 @@ class HybridSearchTool(BaseSearchTool):
                         "low_level_keywords": []
                     }
                 
-                return self.search(query)
+                response = self.search(query)
+                self_tool.last_response = response
+                if isinstance(response, dict):
+                    return response.get("answer") or response.get("final_answer") or "未找到相关信息"
+                return str(response)
             
             def _arun(self_tool, query: Any) -> str:
                 raise NotImplementedError("异步执行未实现")

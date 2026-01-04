@@ -29,6 +29,7 @@ from graphrag_agent.search.tool_registry import (
     create_extra_tool,
 )
 from graphrag_agent.agents.multi_agent.tools.evidence_tracker import get_evidence_tracker
+from graphrag_agent.utils.tool_invocation import invoke_tool_structured
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -152,11 +153,10 @@ class RetrievalExecutor(BaseExecutor):
         """
         if hasattr(tool, "structured_search"):
             return tool.structured_search(payload)
-        if hasattr(tool, "search"):
-            result = tool.search(payload)
-            if isinstance(result, dict):
-                return result
-            return {"answer": result, "retrieval_results": []}
+        try:
+            return invoke_tool_structured(tool, payload)
+        except Exception:
+            pass
         if task_type == "chain_exploration" and hasattr(tool, "explore"):
             query = payload.get("query")
             start_entities = payload.get("start_entities") or payload.get("entities")

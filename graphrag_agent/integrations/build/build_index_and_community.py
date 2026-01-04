@@ -12,13 +12,22 @@ from graphrag_agent.config.settings import community_algorithm
 from graphrag_agent.graph import EntityIndexManager
 from graphrag_agent.graph import GDSConfig, SimilarEntityDetector
 from graphrag_agent.graph import EntityMerger
+from graphrag_agent.graph.core import ensure_vector_index
 from graphrag_agent.graph.processing import EntityQualityProcessor
 from graphrag_agent.community import CommunityDetectorFactory
 from graphrag_agent.community import CommunitySummarizerFactory
 from graphdatascience import GraphDataScience
 
 from graphrag_agent.config.neo4jdb import get_db_manager
-from graphrag_agent.config.settings import MAX_WORKERS, ENTITY_BATCH_SIZE, GDS_MEMORY_LIMIT, NEO4J_CONFIG
+from graphrag_agent.config.settings import (
+    EMBEDDING_DIM,
+    ENTITY_BATCH_SIZE,
+    ENTITY_VECTOR_INDEX,
+    GDS_MEMORY_LIMIT,
+    MAX_WORKERS,
+    NEO4J_CONFIG,
+    VECTOR_SIMILARITY_FUNCTION,
+)
 
 import shutup
 shutup.please()
@@ -154,6 +163,15 @@ class IndexCommunityBuilder:
             vector_store = self.index_manager.create_entity_index()
             if not vector_store:
                 self.console.print("[yellow]警告: 实体索引创建可能不完整[/yellow]")
+
+            ensure_vector_index(
+                self.graph,
+                ENTITY_VECTOR_INDEX,
+                "__Entity__",
+                "embedding",
+                EMBEDDING_DIM,
+                VECTOR_SIMILARITY_FUNCTION,
+            )
             
             self.performance_stats["索引创建"] = time.time() - index_start
             

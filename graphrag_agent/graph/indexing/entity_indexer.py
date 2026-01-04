@@ -5,7 +5,14 @@ from langchain_community.vectorstores import Neo4jVector
 
 from graphrag_agent.models.get_models import get_embeddings_model, get_llm_model
 from graphrag_agent.graph.core import BaseIndexer, connection_manager
-from graphrag_agent.config.settings import ENTITY_BATCH_SIZE, MAX_WORKERS as DEFAULT_MAX_WORKERS
+from graphrag_agent.config.settings import (
+    ENTITY_BATCH_SIZE,
+    MAX_WORKERS as DEFAULT_MAX_WORKERS,
+    ENTITY_VECTOR_INDEX,
+    EMBEDDING_DIM,
+    VECTOR_SIMILARITY_FUNCTION,
+    CLEAN_LEGACY_INDEXES,
+)
 
 class EntityIndexManager(BaseIndexer):
     """
@@ -47,29 +54,66 @@ class EntityIndexManager(BaseIndexer):
         
     def clear_existing_index(self) -> None:
         """清除已存在的实体embedding索引，为了防止有的时候embedding模型的切换问题，这里顺便清下vector索引"""
-        connection_manager.drop_index("entity_embedding")
-        connection_manager.drop_index("vector")
+        connection_manager.drop_index(ENTITY_VECTOR_INDEX)
+        if CLEAN_LEGACY_INDEXES:
+            # 兼容历史命名，防止旧索引残留
+            connection_manager.drop_index("entity_embedding")
+            connection_manager.drop_index("vector")
 
-    def create_entity_index(self, 
+    def create_vector_index(self, node_label: str = '__Entity__', embedding_property: str = 'embedding') -> None:
+        """
+        显式创建 Neo4j Vector Index（工程级实践）
+
+        Args:
+            node_label: 节点标签
+            embedding_property: embedding属性名
+        """
+        query = f"""
+        CREATE VECTOR INDEX {ENTITY_VECTOR_INDEX} IF NOT EXISTS
+        FOR (e:`{node_label}`)
+        ON (e.{embedding_property})
+        OPTIONS {{
+          indexConfig: {{
+            `vector.dimensions`: {EMBEDDING_DIM},
+            `vector.similarity_function`: '{VECTOR_SIMILARITY_FUNCTION}'
+          }}
+        }}
+        """
+        try:
+            self.graph.query(query)
+            print(f"✅ Vector index created/verified: {ENTITY_VECTOR_INDEX}")
+        except Exception as e:
+            # 索引可能已存在，这不是错误
+            if "already exists" in str(e).lower() or "equivalent" in str(e).lower():
+                print(f"✅ Vector index already exists: {ENTITY_VECTOR_INDEX}")
+            else:
+                print(f"⚠️ Vector index creation warning: {e}")
+                raise
+
+    def create_entity_index(self,
                           node_label: str = '__Entity__',
                           text_properties: List[str] = ['id', 'description'],
-                          embedding_property: str = 'embedding') -> Optional[Neo4jVector]:
+                          embedding_property: str = 'embedding') -> bool:
         """
-        创建实体的向量索引，带批处理和并行优化
-        
+        为实体节点生成embeddings并创建 Neo4j Vector Index（工程级实践）
+
+        流程：
+        1. 计算 embeddings
+        2. 显式创建 vector index
+
         Args:
             node_label: 实体节点的标签
             text_properties: 用于计算embedding的文本属性列表
             embedding_property: 存储embedding的属性名
-            
+
         Returns:
-            Neo4jVector: 创建的向量存储对象
+            bool: 是否成功创建索引
         """
         start_time = time.time()
-        
-        # 先清除已有索引
+
+        # 先清除已有的旧索引
         self.clear_existing_index()
-        
+
         # 获取所有实体节点以准备批处理
         entities = self.graph.query(
             f"""
@@ -78,33 +122,35 @@ class EntityIndexManager(BaseIndexer):
             RETURN id(e) AS neo4j_id, e.id AS entity_id
             """
         )
-        
+
         if not entities:
-            print("没有找到需要处理的实体节点")
-            return None
-            
-        print(f"开始为 {len(entities)} 个实体生成embeddings")
-        
-        # 批量处理所有实体
+            print("没有找到需要处理的实体节点（可能已存在 embeddings）")
+            # 即使没有新的节点，也确保 vector index 存在
+            try:
+                self.create_vector_index(node_label, embedding_property)
+                print("✅ Vector index 已就绪（无新节点需要处理）")
+                return True
+            except Exception as e:
+                print(f"❌ Vector index 创建失败: {e}")
+                return False
+
+        print(f"开始为 {len(entities)} 个实体生成 embeddings")
+
+        # 步骤 1: 批量计算并更新 embeddings
         self._process_embeddings_in_batches(entities, node_label, text_properties, embedding_property)
-        
-        # 创建新的向量索引
+
+        # 步骤 2: 显式创建 Neo4j Vector Index（关键！）
         try:
-            vector_store = Neo4jVector.from_existing_graph(
-                self.embeddings,
-                node_label=node_label,
-                text_node_properties=text_properties,
-                embedding_node_property=embedding_property
-            )
-            
+            self.create_vector_index(node_label, embedding_property)
+
             end_time = time.time()
-            print(f"索引创建成功，总耗时: {end_time - start_time:.2f}秒")
-            print(f"其中: embedding计算: {self.embedding_time:.2f}秒, 数据库操作: {self.db_time:.2f}秒")
-            
-            return vector_store
+            print(f"\n✅ 索引创建成功，总耗时: {end_time - start_time:.2f}秒")
+            print(f"   其中: embedding计算: {self.embedding_time:.2f}秒, 数据库操作: {self.db_time:.2f}秒")
+
+            return True
         except Exception as e:
-            print(f"创建向量索引时出错: {e}")
-            return None
+            print(f"❌ Vector index 创建失败: {e}")
+            return False
     
     def _process_embeddings_in_batches(self, entities: List[Dict[str, Any]], 
                                       node_label: str, text_properties: List[str], 

@@ -5,7 +5,6 @@ from langsmith import traceable
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
-from langchain.tools.retriever import create_retriever_tool
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.tools import BaseTool
 
@@ -19,6 +18,7 @@ from graphrag_agent.config.settings import lc_description
 from graphrag_agent.search.tool.base import BaseSearchTool
 from graphrag_agent.search.local_search import LocalSearch
 from graphrag_agent.search.retrieval_adapter import results_from_documents, results_to_payload
+from graphrag_agent.search.response_models import ResponseBuilder, create_error_response
 
 
 class LocalSearchTool(BaseSearchTool):
@@ -151,11 +151,31 @@ class LocalSearchTool(BaseSearchTool):
             keywords = []
         return {"query": query, "keywords": keywords}
 
-    @traceable
-    def search(self, query_input: Any) -> str:
-        """兼容旧接口，返回纯文本答案。"""
-        structured = self.structured_search(query_input)
-        return structured.get("answer", "未找到相关信息")
+    def _build_references_from_payload(self, retrieval_payload: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+        """从标准化的检索payload中提取引用ID。"""
+        references = {
+            "chunks": set(),
+            "entities": set(),
+            "communities": set(),
+            "relationships": set(),
+        }
+
+        for item in retrieval_payload or []:
+            metadata = item.get("metadata", {}) if isinstance(item, dict) else {}
+            source_type = metadata.get("source_type")
+            source_id = metadata.get("source_id")
+            if not source_id:
+                continue
+            if source_type == "chunk":
+                references["chunks"].add(str(source_id))
+            elif source_type == "entity":
+                references["entities"].add(str(source_id))
+            elif source_type == "community":
+                references["communities"].add(str(source_id))
+            elif source_type == "relationship":
+                references["relationships"].add(str(source_id))
+
+        return {key: list(values) for key, values in references.items()}
 
     def structured_search(self, query_input: Any) -> Dict[str, Any]:
         """
@@ -174,11 +194,48 @@ class LocalSearchTool(BaseSearchTool):
 
         cached_structured = self.cache_manager.get(structured_cache_key)
         if isinstance(cached_structured, dict):
-            return cached_structured
+            cached_copy = dict(cached_structured)
+            cached_copy.setdefault("cache_hit", True)
+            cached_copy.setdefault("answer", cached_copy.get("final_answer", ""))
+            if "references" not in cached_copy:
+                cached_copy["references"] = self._build_references_from_payload(
+                    cached_copy.get("retrieval_results", [])
+                )
+            cached_copy.setdefault("cache_key", structured_cache_key)
+            return cached_copy
 
         cached_answer = self.cache_manager.get(cache_key)
+        if isinstance(cached_answer, dict):
+            upgraded = dict(cached_answer)
+            upgraded.setdefault("cache_hit", True)
+            upgraded.setdefault("answer", upgraded.get("final_answer", ""))
+            if "references" not in upgraded:
+                upgraded["references"] = self._build_references_from_payload(
+                    upgraded.get("retrieval_results", [])
+                )
+            upgraded.setdefault("cache_key", structured_cache_key)
+            self.cache_manager.set(structured_cache_key, upgraded)
+            return upgraded
+        if isinstance(cached_answer, str):
+            upgraded = {
+                "query": query,
+                "keywords": keywords,
+                "answer": cached_answer,
+                "final_answer": cached_answer,
+                "retrieval_results": [],
+                "references": {"chunks": [], "entities": [], "communities": [], "relationships": []},
+                "raw_context": [],
+                "timing": {},
+                "cache_hit": True,
+                "cache_key": structured_cache_key,
+                "Chunks": [],
+            }
+            self.cache_manager.set(structured_cache_key, upgraded)
+            self.cache_manager.set(cache_key, upgraded)
+            return upgraded
 
         try:
+            search_start = time.time()
             chain_output = self.rag_chain.invoke(
                 {
                     "input": query,
@@ -187,29 +244,43 @@ class LocalSearchTool(BaseSearchTool):
                 }
             )
 
+            pipeline_time = time.time() - search_start
+            self.performance_metrics["query_time"] = pipeline_time
+
             answer = chain_output.get("answer") or "抱歉，我无法回答这个问题。"
             documents = chain_output.get("context") or []
             retrieval_results = results_to_payload(
                 results_from_documents(documents, source="local_search")
             )
+            references = self._build_references_from_payload(retrieval_results)
+
+            total_time = time.time() - overall_start
+            self.performance_metrics["total_time"] = total_time
 
             structured_result = {
                 "query": query,
                 "keywords": keywords,
                 "answer": answer,
+                "final_answer": answer,
                 "retrieval_results": retrieval_results,
+                "references": references,
                 "raw_context": [
                     {"page_content": getattr(doc, "page_content", ""), "metadata": getattr(doc, "metadata", {})}
                     for doc in documents
                 ],
+                "timing": {
+                    "search_time": pipeline_time,
+                    "llm_time": None,
+                    "total_time": total_time,
+                },
+                "cache_hit": False,
+                "cache_key": structured_cache_key,
+                "Chunks": references.get("chunks", []),
             }
 
             # 缓存结构化结果与纯文本答案
             self.cache_manager.set(structured_cache_key, structured_result)
-            if cached_answer is None:
-                self.cache_manager.set(cache_key, answer)
-
-            self.performance_metrics["total_time"] = time.time() - overall_start
+            self.cache_manager.set(cache_key, structured_result)
             return structured_result
 
         except Exception as e:
@@ -220,18 +291,81 @@ class LocalSearchTool(BaseSearchTool):
                 "query": query,
                 "keywords": keywords,
                 "answer": error_msg,
+                "final_answer": error_msg,
                 "retrieval_results": [],
+                "references": {"chunks": [], "entities": [], "communities": [], "relationships": []},
                 "raw_context": [],
+                "timing": {"total_time": self.performance_metrics.get("total_time")},
+                "cache_hit": False,
+                "cache_key": structured_cache_key,
                 "error": str(e),
+                "Chunks": [],
             }
+
+    @traceable
+    def search(self, query_input: Any) -> Dict[str, Any]:
+        """执行本地搜索并返回标准化响应。"""
+        try:
+            structured = self.structured_search(query_input)
+            references = structured.get("references") or self._build_references_from_payload(
+                structured.get("retrieval_results", [])
+            )
+            timing = structured.get("timing", {})
+            answer_text = structured.get("answer") or structured.get("final_answer") or "未找到相关信息"
+
+            builder = ResponseBuilder(retriever_name="local_search")
+            builder.add_chunks(references.get("chunks", []))
+            builder.add_entities(references.get("entities", []))
+            builder.add_communities(references.get("communities", []))
+            builder.add_relationships(references.get("relationships", []))
+            builder.set_timing(
+                search_time=timing.get("search_time"),
+                llm_time=timing.get("llm_time"),
+                total_time=timing.get("total_time"),
+            )
+            builder.set_cache_hit(structured.get("cache_hit", False))
+
+            response = builder.build_dict(answer=answer_text)
+            response.update({
+                "query": structured.get("query"),
+                "keywords": structured.get("keywords", []),
+                "retrieval_results": structured.get("retrieval_results", []),
+                "references": references,
+                "raw_context": structured.get("raw_context", []),
+                "timing": timing,
+                "final_answer": answer_text,
+                "Chunks": references.get("chunks", []),
+            })
+
+            cache_key = structured.get("cache_key") or structured.get("query")
+            if cache_key:
+                self.cache_manager.set(f"{cache_key}::response", response)
+
+            return response
+        except Exception as e:
+            return create_error_response("local_search", str(e))
     
-    def get_tool(self):
-        """返回兼容旧流程的Retriever工具。"""
-        return create_retriever_tool(
-            self.retriever,
-            "lc_search_tool",
-            lc_description,
-        )
+    def get_tool(self) -> BaseTool:
+        """返回只暴露answer的本地检索工具。"""
+        outer = self
+
+        class LocalRetrievalTool(BaseTool):
+            name: str = "lc_search_tool"
+            description: str = lc_description
+
+            def _run(self_tool, query: Any, **kwargs: Any) -> str:
+                payload = query if isinstance(query, dict) else {"query": query}
+                payload.update(kwargs)
+                response = outer.search(payload)
+                self_tool.last_response = response
+                if isinstance(response, dict):
+                    return response.get("answer") or response.get("final_answer") or "未找到相关信息"
+                return str(response)
+
+            def _arun(self_tool, *args: Any, **kwargs: Any):
+                raise NotImplementedError("异步执行未实现")
+
+        return LocalRetrievalTool()
 
     def get_structured_tool(self) -> BaseTool:
         """返回可直接输出结构化结果的工具版本。"""
@@ -248,7 +382,7 @@ class LocalSearchTool(BaseSearchTool):
                 if not isinstance(query, dict):
                     payload = {"query": query}
                 payload.update(kwargs)
-                return outer.structured_search(payload)
+                return outer.search(payload)
 
             def _arun(self_tool, *args: Any, **kwargs: Any):
                 raise NotImplementedError("异步执行未实现")

@@ -43,6 +43,18 @@ class OrchestratorConfig(BaseModel):
         default=True,
         description="Planner未返回执行信号时是否视为失败",
     )
+    enable_fast_path: bool = Field(
+        default=True,
+        description="是否启用简单查询的快速通道（跳过 Planner）",
+    )
+    fast_path_max_length: int = Field(
+        default=30,
+        description="快速通道的查询最大长度（字符数）",
+    )
+    fast_path_keywords: List[str] = Field(
+        default_factory=lambda: ["对比", "分析", "详细", "深入", "研究", "解释", "为什么"],
+        description="包含这些关键词的查询不走快速通道",
+    )
 
 
 class OrchestratorMetrics(BaseModel):
@@ -105,6 +117,208 @@ class MultiAgentOrchestrator:
         self._reporter = reporter
         self.config = config or OrchestratorConfig()
 
+    def _determine_route(self, query: str) -> str:
+        """
+        [路由网关] 根据查询特征决定执行路径
+
+        三层路由策略：
+        1. FAST: 事实性/简单查询 -> Local Search（跳过 Planner）
+        2. SLOW: 分析性/综合查询 -> Global Search（跳过 Planner，使用社区级搜索）
+        3. HEAVY: 研究性/复杂任务 -> 完整 Plan-Execute-Report（包含 Planner）
+
+        Args:
+            query: 用户输入的查询文本
+
+        Returns:
+            路由类型: "FAST" | "SLOW" | "HEAVY"
+        """
+        if not self.config.enable_fast_path:
+            return "HEAVY"
+
+        # Heavy lane: 研究性/复杂任务关键词
+        heavy_keywords = ["深度研究", "调研报告", "长文", "详细调查", "深入", "详细"]
+        if any(kw in query for kw in heavy_keywords):
+            _LOGGER.debug("检测到复杂研究关键词，路由到 HEAVY 通道")
+            return "HEAVY"
+
+        # Slow lane: 分析性/综合性关键词
+        slow_keywords = ["总结", "概括", "全貌", "趋势", "对比", "分析"]
+        if any(kw in query for kw in slow_keywords):
+            _LOGGER.debug("检测到分析性关键词，路由到 SLOW 通道（Global Search）")
+            return "SLOW"
+
+        # Fast lane: 短的事实性查询
+        if len(query) < 50:
+            _LOGGER.debug("检测到简单事实性查询，路由到 FAST 通道（Local Search）")
+            return "FAST"
+
+        # 默认走完整流程
+        _LOGGER.debug("查询较长且无明显特征，路由到 HEAVY 通道")
+        return "HEAVY"
+
+    def _create_direct_signal(
+        self,
+        query: str,
+        route: str,
+    ) -> "PlanExecutionSignal":
+        """
+        为直接通道（FAST/SLOW）构造执行信号
+
+        Args:
+            query: 用户查询
+            route: 路由类型（"FAST" 或 "SLOW"）
+
+        Returns:
+            PlanExecutionSignal: 执行信号
+        """
+        from graphrag_agent.agents.multi_agent.core.plan_spec import (
+            PlanExecutionSignal,
+            TaskNode,
+        )
+
+        if route == "FAST":
+            # FAST 通道: Local Search（实体级搜索）
+            task = TaskNode(
+                task_id="fast_local_search_1",
+                task_type="local_search",
+                description=f"快速检索回答查询：{query}",
+                parameters={"query": query},
+                priority=1,
+                depends_on=[],
+            )
+        elif route == "SLOW":
+            # SLOW 通道: Global Search（社区级搜索）
+            task = TaskNode(
+                task_id="slow_global_search_1",
+                task_type="global_search",
+                description=f"全局检索回答查询：{query}",
+                parameters={"query": query},
+                priority=1,
+                depends_on=[],
+            )
+        else:
+            # 兜底：使用 local_search
+            task = TaskNode(
+                task_id="fallback_search_1",
+                task_type="local_search",
+                description=f"检索回答查询：{query}",
+                parameters={"query": query},
+                priority=1,
+                depends_on=[],
+            )
+
+        return PlanExecutionSignal(
+            tasks=[task.model_dump()],
+            execution_mode="sequential",
+        )
+
+    def _create_dummy_plan(self) -> Optional[PlannerResult]:
+        """
+        为直接通道创建一个占位的 PlannerResult，用于前端兼容性
+
+        Returns:
+            占位的 PlannerResult（plan_spec=None 表示跳过规划）
+        """
+        from graphrag_agent.agents.multi_agent.core.clarification import ClarificationResult
+
+        return PlannerResult(
+            plan_spec=None,  # 直接通道跳过规划
+            executor_signal=None,  # 由 _create_direct_signal 单独构造
+            clarification=ClarificationResult(
+                needs_clarification=False,
+                questions=[],
+            ),
+        )
+
+    def _execute_direct_lane(
+        self,
+        state: PlanExecuteState,
+        metrics: OrchestratorMetrics,
+        route: str,
+        report_type: Optional[str] = None,
+    ) -> OrchestratorResult:
+        """
+        直接通道：FAST/SLOW 查询跳过 Planner，直接执行搜索
+
+        路由策略：
+        - FAST: local_search（实体级检索）
+        - SLOW: global_search（社区级聚合）
+
+        流程：
+        1. 构造直接执行信号（根据路由类型）
+        2. 执行检索任务（复用 WorkerCoordinator）
+        3. 可选：生成简单报告
+
+        Args:
+            state: 当前状态
+            metrics: 性能指标
+            route: 路由类型（"FAST" 或 "SLOW"）
+            report_type: 报告类型
+
+        Returns:
+            编排结果
+        """
+        errors: List[str] = []
+
+        # 构造执行信号
+        signal = self._create_direct_signal(state.input, route)
+
+        # 规划阶段耗时为 0（跳过 Planner）
+        metrics.planning_seconds = 0.0
+
+        # --- 执行阶段 ---
+        execution_records: List[ExecutionRecord] = []
+        exec_start = time.perf_counter()
+        try:
+            execution_records = self._worker.execute_plan(state, signal)
+        except Exception as exc:  # noqa: BLE001
+            lane_name = "FAST" if route == "FAST" else "SLOW"
+            _LOGGER.exception("%s 通道执行失败: %s", lane_name, exc)
+            errors.append(f"{lane_name} 通道执行失败: {exc}")
+        finally:
+            metrics.execution_seconds = time.perf_counter() - exec_start
+
+        self._print_execution_summary(execution_records, state)
+
+        # --- 报告生成（可选）---
+        report_result: Optional[ReportResult] = None
+        # 对于直接通道，可以选择不生成完整报告
+        # 如果需要报告，可以解除以下注释：
+        # if self.config.auto_generate_report and not errors:
+        #     report_start = time.perf_counter()
+        #     try:
+        #         report_result = self._reporter.generate_report(
+        #             state,
+        #             report_type=report_type or "short_answer",
+        #         )
+        #         if report_result is not None:
+        #             self._print_report_summary(report_result)
+        #     except Exception as exc:  # noqa: BLE001
+        #         _LOGGER.exception("报告生成失败: %s", exc)
+        #         errors.append(f"报告生成失败: {exc}")
+        #     finally:
+        #         metrics.reporting_seconds = time.perf_counter() - report_start
+
+        # 确定最终状态
+        status = "completed" if not errors else "failed"
+        state.update_timestamp()
+
+        lane_name = "FAST (Local Search)" if route == "FAST" else "SLOW (Global Search)"
+        _LOGGER.info(
+            "🚀 %s 通道完成 | 耗时: %.2fs (节省 Planner 时间)",
+            lane_name,
+            metrics.execution_seconds,
+        )
+
+        return OrchestratorResult(
+            status=status,
+            planner=self._create_dummy_plan(),  # 占位，前端兼容性
+            execution_records=execution_records,
+            report=report_result,
+            errors=errors,
+            metrics=metrics,
+        )
+
     def run(
         self,
         state: PlanExecuteState,
@@ -114,10 +328,26 @@ class MultiAgentOrchestrator:
     ) -> OrchestratorResult:
         """
         执行完整的 Plan-Execute-Report 流程
+
+        三层自适应路由：
+        1. FAST 通道: 简单查询 -> Local Search（跳过 Planner）
+        2. SLOW 通道: 分析查询 -> Global Search（跳过 Planner）
+        3. HEAVY 通道: 复杂任务 -> 完整 Plan-Execute-Report（包含 Planner）
         """
         errors: List[str] = []
         metrics = OrchestratorMetrics()
 
+        # ========== 三层路由网关 ==========
+        route = self._determine_route(state.input)
+
+        if route in ["FAST", "SLOW"]:
+            # FAST/SLOW 通道：跳过 Planner，直接执行搜索
+            lane_type = "Local Search" if route == "FAST" else "Global Search"
+            _LOGGER.info("🚀 进入 %s 通道：%s（跳过 Planner）", route, lane_type)
+            return self._execute_direct_lane(state, metrics, route, report_type)
+
+        # ========== HEAVY 通道：完整 Plan-Execute-Report ==========
+        _LOGGER.info("🔬 进入 HEAVY 通道：完整 Plan-Execute-Report 流程")
         # --- Plan ---
         plan_start = time.perf_counter()
         try:

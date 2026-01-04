@@ -12,14 +12,16 @@ def custom_css():
         gap: 2px;
     }
     .stTabs [data-baseweb="tab"] {
-        background-color: #f0f2f6;
-        border-radius: 4px 4px 0px 0px;
+        background-color: #e8eef5;
+        border-radius: 6px 6px 0px 0px;
         padding: 0.5rem 1rem;
         font-weight: 600;
+        color: #0f294d;
     }
     .stTabs [aria-selected="true"] {
-        background-color: #4b9bff;
-        color: white;
+        background: linear-gradient(90deg, #0f62ac 0%, #0b4b87 100%);
+        color: #ffffff;
+        box-shadow: inset 0 -2px 0 #0b4b87;
     }
     .agent-selector {
         padding: 10px;
@@ -29,7 +31,7 @@ def custom_css():
     }
     .chat-container {
         border-radius: 10px;
-        background-color: white;
+        background-color: #f9fbfe;
         padding: 10px;
         height: calc(100vh - 250px);
         overflow-y: auto;
@@ -38,14 +40,14 @@ def custom_css():
     }
     .debug-container {
         border-radius: 10px;
-        background-color: white;
+        background-color: #f9fbfe;
         height: calc(100vh - 120px);
         overflow-y: auto;
         padding: 10px;
         box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
     }
     .example-question {
-        background-color: #f7f7f7;
+        background-color: #edf2f9;
         padding: 8px;
         border-radius: 4px;
         margin: 5px 0;
@@ -53,12 +55,12 @@ def custom_css():
         transition: background-color 0.3s;
     }
     .example-question:hover {
-        background-color: #e6e6e6;
+        background-color: #d6e6f7;
     }
     .settings-bar {
         padding: 10px;
-        background-color: #f7f7f7;
-        border-radius: 5px;
+        background-color: #edf2f9;
+        border-radius: 6px;
         margin-bottom: 10px;
         display: flex;
         align-items: center;
@@ -66,7 +68,7 @@ def custom_css():
     }
     /* 源内容样式 - 改进版 */
     .source-content-container {
-        background-color: #f8f9fa;
+        background-color: #f0f5fb;
         border-radius: 8px;
         padding: 15px;
         margin-top: 10px;
@@ -75,29 +77,29 @@ def custom_css():
     .source-content {
         white-space: pre-wrap;
         word-wrap: break-word;
-        background-color: #f5f5f5;
+        background-color: #eef4fb;
         padding: 16px;
         border-radius: 4px;
         font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
         font-size: 14px;
         line-height: 1.6;
         overflow-x: auto;
-        color: #24292e;
+        color: #0f294d;
         max-height: 600px;
         overflow-y: auto;
         border: 1px solid #e1e4e8;
     }
     /* 调试信息样式 */
     .debug-header {
-        background-color: #eef2f5;
+        background-color: #e3edf8;
         padding: 10px 15px;
         border-radius: 5px;
         margin-bottom: 15px;
-        border-left: 4px solid #4b9bff;
+        border-left: 4px solid #0f62ac;
     }
     /* 知识图谱控制面板 */
     .kg-controls {
-        background-color: #f8f9fa;
+        background-color: #f0f5fb;
         padding: 12px;
         border-radius: 8px;
         margin-bottom: 15px;
@@ -110,16 +112,16 @@ def custom_css():
     }
     /* 源内容按钮样式 */
     .view-source-button {
-        background-color: #f1f8ff;
-        border: 1px solid #c8e1ff;
-        color: #0366d6;
+        background-color: #e6f0ff;
+        border: 1px solid #b7d0ff;
+        color: #0b4b87;
         border-radius: 6px;
         padding: 4px 8px;
         font-size: 12px;
         margin: 4px;
     }
     .view-source-button:hover {
-        background-color: #dbedff;
+        background-color: #d6e6f7;
     }
     /* 反馈按钮样式 */
     .feedback-buttons {
@@ -152,14 +154,14 @@ def custom_css():
     /* 迭代轮次样式 */
     .iteration-round {
         background-color: #f8f9fa;
-        border-left: 4px solid #4285F4;
+        border-left: 4px solid #0f62ac;
         padding: 10px;
         margin: 10px 0;
         border-radius: 4px;
     }
     
     .iteration-query {
-        background-color: #f0f2f6;
+        background-color: #e8eef5;
         padding: 8px 12px;
         border-radius: 4px;
         font-family: monospace;
@@ -170,7 +172,7 @@ def custom_css():
         background-color: #e8f5e9;
         padding: 12px;
         border-radius: 4px;
-        border-left: 3px solid #4CAF50;
+        border-left: 3px solid #0f62ac;
         margin: 10px 0;
     }
     
@@ -185,7 +187,7 @@ def custom_css():
     
     .iteration-progress-bar {
         height: 100%;
-        background-color: #4CAF50;
+        background-color: #0f62ac;
         border-radius: 4px;
     }
     </style>

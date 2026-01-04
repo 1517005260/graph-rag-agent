@@ -1,4 +1,4 @@
-aiohttp==3.8.5
+aiohttp==3.9.5
 chardet==3.0.4 
 fastapi==0.115.11
 faiss-cpu==1.11.0

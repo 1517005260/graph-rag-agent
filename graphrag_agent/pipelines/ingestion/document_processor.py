@@ -1,28 +1,60 @@
 import os
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Literal
 
 from graphrag_agent.pipelines.ingestion.file_reader import FileReader
 from graphrag_agent.pipelines.ingestion.text_chunker import ChineseTextChunker
+from graphrag_agent.pipelines.ingestion.specialized_chunkers import GraphChunker, RAGChunker, create_graph_chunker, create_rag_chunker
 from graphrag_agent.config.settings import FILES_DIR, CHUNK_SIZE, OVERLAP
 
 
 class DocumentProcessor:
     """
     文档处理器，用于整合文件读取、文本分块和向量操作等功能
+
+    工程级优化（解决实体爆炸问题）：
+    - 支持双 Chunker 策略：Graph 构建用大 chunk，RAG 检索用小 chunk
+    - 默认使用旧 Chunker（兼容性），推荐使用专用 Chunker
     """
-    
-    def __init__(self, directory_path: str, chunk_size: int = CHUNK_SIZE, overlap: int = OVERLAP):
+
+    def __init__(
+        self,
+        directory_path: str,
+        chunk_size: int = CHUNK_SIZE,
+        overlap: int = OVERLAP,
+        chunker_mode: Literal['default', 'graph', 'rag'] = 'default'
+    ):
         """
         初始化文档处理器
-        
+
         Args:
             directory_path: 文件目录路径
-            chunk_size: 分块大小
-            overlap: 分块重叠大小
+            chunk_size: 分块大小（仅当 chunker_mode='default' 时使用）
+            overlap: 分块重叠大小（仅当 chunker_mode='default' 时使用）
+            chunker_mode: Chunker 模式
+                - 'default': 使用旧的 ChineseTextChunker（兼容性）
+                - 'graph': 使用 GraphChunker（大 chunk，用于实体抽取）
+                - 'rag': 使用 RAGChunker（小 chunk，用于向量检索）
+
+        推荐配置：
+            - Graph 构建：chunker_mode='graph'
+            - RAG 检索：chunker_mode='rag'
         """
         self.directory_path = directory_path
         self.file_reader = FileReader(directory_path)
-        self.chunker = ChineseTextChunker(chunk_size, overlap)
+        self.chunker_mode = chunker_mode
+
+        # 根据模式选择 chunker
+        if chunker_mode == 'graph':
+            self.chunker = create_graph_chunker()  # 生产级配置 (900, 50)
+            print(f"📊 使用 GraphChunker: chunk_size=900, overlap=50 (生产级验证配置)")
+        elif chunker_mode == 'rag':
+            self.chunker = create_rag_chunker()    # 小 chunk (400, 80)
+            print(f"🔍 使用 RAGChunker: chunk_size=400, overlap=80")
+        else:
+            # 默认模式：使用旧 Chunker（兼容性）
+            self.chunker = ChineseTextChunker(chunk_size, overlap)
+            print(f"⚠️  使用默认 Chunker: chunk_size={chunk_size}, overlap={overlap}")
+            print(f"   推荐使用 chunker_mode='graph' 或 'rag' 以获得更好的性能")
         
     def process_directory(self, file_extensions: Optional[List[str]] = None, recursive: bool = True) -> List[Dict[str, Any]]:
         """

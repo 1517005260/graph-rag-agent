@@ -83,7 +83,6 @@ def send_message_stream(message: str, on_token: Callable[[str, bool], None]) -> 
             # 如果有思考内容，返回它
             return response.get("raw_thinking", "")
         return ""
-        
     try:
         # 构建请求参数
         params = {
@@ -166,6 +165,18 @@ def send_message_stream(message: str, on_token: Callable[[str, bool], None]) -> 
         on_token(f"\n\n连接错误: {str(e)}")
         print(f"流式API连接错误: {str(e)}")
         return None
+
+
+def get_system_status() -> Dict:
+    """获取后端索引就绪状态，供前端在聊天前进行校验。"""
+    try:
+        response = requests.get(f"{API_URL}/status", timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"无法获取系统状态：{str(e)}")
+        return {}
+
 
 @monitor_performance(endpoint="send_feedback")
 def send_feedback(message_id: str, query: str, is_positive: bool, thread_id: str, agent_type: str = "graph_agent"):
@@ -541,10 +552,22 @@ def clear_chat():
         st.session_state.execution_log = None
         st.session_state.kg_data = None
         st.session_state.source_content = None
-        
+
         # 重要：也要清除current_kg_message
         if 'current_kg_message' in st.session_state:
             del st.session_state.current_kg_message
+
+        # 清除持久化的对话历史文件
+        from pathlib import Path
+        history_dir = Path("./cache/chat_history")
+        history_file = history_dir / f"{st.session_state.session_id}.json"
+        if history_file.exists():
+            history_file.unlink()
+
+        # 同时清除默认会话文件
+        default_session_file = history_dir / "current_session.json"
+        if default_session_file.exists():
+            default_session_file.unlink()
         
         # 清除后端状态
         response = requests.post(

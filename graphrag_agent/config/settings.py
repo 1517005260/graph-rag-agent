@@ -100,6 +100,22 @@ OVERLAP = _get_env_int("CHUNK_OVERLAP", 100) or 100  # 分块重叠长度
 MAX_TEXT_LENGTH = _get_env_int("MAX_TEXT_LENGTH", 500000) or 500000  # 最大文本长度
 similarity_threshold = _get_env_float("SIMILARITY_THRESHOLD", 0.9) or 0.9  # 向量相似度阈值
 
+# ===== Vector Index 配置（全局唯一） =====
+
+# Vector index names（全系统唯一，用于 Neo4j Vector Index）
+CHUNK_VECTOR_INDEX = os.getenv("CHUNK_VECTOR_INDEX", "chunk_embedding_index")
+ENTITY_VECTOR_INDEX = os.getenv("ENTITY_VECTOR_INDEX", "entity_embedding_index")
+CLEAN_LEGACY_INDEXES = _get_env_bool("CLEAN_LEGACY_INDEXES", False)
+
+# Embedding dimension（必须和模型一致）
+# text-embedding-3-large: 1536 维
+# text-embedding-3-small: 512 维
+# text-embedding-ada-002: 1536 维
+EMBEDDING_DIM = _get_env_int("EMBEDDING_DIM", 1536) or 1536
+
+# Vector similarity function: cosine / euclidean / dot_product
+VECTOR_SIMILARITY_FUNCTION = os.getenv("VECTOR_SIMILARITY_FUNCTION", "cosine")
+
 # ===== 回答生成配置 =====
 
 response_type = os.getenv("RESPONSE_TYPE", "多个段落")  # 默认回答形式
@@ -174,12 +190,13 @@ SENTENCE_TRANSFORMER_MODELS = [
     for item in os.getenv("SENTENCE_TRANSFORMER_MODELS", "").split(",")
     if item.strip()
 ]  # 预加载的本地模型列表
-CACHE_EMBEDDING_PROVIDER = os.getenv(
-    "CACHE_EMBEDDING_PROVIDER", "sentence_transformer"
-).lower()
+CACHE_EMBEDDING_PROVIDER = os.getenv("CACHE_EMBEDDING_PROVIDER", "openai")
+
+# sentence-transformer 只作为可选项保留，不做默认
 CACHE_SENTENCE_TRANSFORMER_MODEL = os.getenv(
     "CACHE_SENTENCE_TRANSFORMER_MODEL", "all-MiniLM-L6-v2"
 )
+
 
 CACHE_SETTINGS = {
     "dir": CACHE_DIR,
@@ -200,40 +217,58 @@ CACHE_SETTINGS = {
 # ===== Neo4j 连接配置 =====
 
 NEO4J_URI = os.getenv("NEO4J_URI", "")
-NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "")
+
+# 兼容两种命名：NEO4J_USER / NEO4J_USERNAME
+NEO4J_USER = os.getenv("NEO4J_USER") or os.getenv("NEO4J_USERNAME") or ""
+NEO4J_USERNAME = NEO4J_USER  # 保持旧变量可用
+
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
 NEO4J_MAX_POOL_SIZE = _get_env_int("NEO4J_MAX_POOL_SIZE", 10) or 10
 NEO4J_REFRESH_SCHEMA = _get_env_bool("NEO4J_REFRESH_SCHEMA", False)
 
+NEO4J_DATABASE = os.getenv("NEO4J_DATABASE") or os.getenv("NEO4J_DB") or None
+
 NEO4J_CONFIG = {
     "uri": NEO4J_URI,
-    "username": NEO4J_USERNAME,
+    "username": NEO4J_USER,      # ✅ 统一使用 NEO4J_USER
     "password": NEO4J_PASSWORD,
     "max_pool_size": NEO4J_MAX_POOL_SIZE,
     "refresh_schema": NEO4J_REFRESH_SCHEMA,
+    "database": NEO4J_DATABASE,  # ✅ 如果你的 neo4jdb.py 支持 database 字段就会用到
 }
+
 
 # ===== LLM 与嵌入模型配置 =====
 
+# 通用配置（兼容旧版）
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
-OPENAI_EMBEDDINGS_MODEL = os.getenv("OPENAI_EMBEDDINGS_MODEL") or None
+
+# LLM 专用配置（如果不设置则使用通用配置）
+OPENAI_LLM_API_KEY = os.getenv("OPENAI_LLM_API_KEY") or OPENAI_API_KEY
+OPENAI_LLM_BASE_URL = os.getenv("OPENAI_LLM_BASE_URL") or OPENAI_BASE_URL
 OPENAI_LLM_MODEL = os.getenv("OPENAI_LLM_MODEL") or None
+
+# 嵌入模型专用配置（如果不设置则使用通用配置）
+OPENAI_EMBEDDING_API_KEY = os.getenv("OPENAI_EMBEDDING_API_KEY") or OPENAI_API_KEY
+OPENAI_EMBEDDING_BASE_URL = os.getenv("OPENAI_EMBEDDING_BASE_URL") or OPENAI_BASE_URL
+OPENAI_EMBEDDINGS_MODEL = os.getenv("OPENAI_EMBEDDINGS_MODEL") or "text-embedding-3-large"
+
 LLM_TEMPERATURE = _get_env_float("TEMPERATURE", None)
 LLM_MAX_TOKENS = _get_env_int("MAX_TOKENS", None)
 
 OPENAI_EMBEDDING_CONFIG = {
     "model": OPENAI_EMBEDDINGS_MODEL,
-    "api_key": OPENAI_API_KEY,
-    "base_url": OPENAI_BASE_URL,
+    "api_key": OPENAI_EMBEDDING_API_KEY,
+    "base_url": OPENAI_EMBEDDING_BASE_URL,
 }
 
 OPENAI_LLM_CONFIG = {
     "model": OPENAI_LLM_MODEL,
     "temperature": LLM_TEMPERATURE,
     "max_tokens": LLM_MAX_TOKENS,
-    "api_key": OPENAI_API_KEY,
-    "base_url": OPENAI_BASE_URL,
+    "api_key": OPENAI_LLM_API_KEY,
+    "base_url": OPENAI_LLM_BASE_URL,
 }
 
 # ===== 相似实体检测参数 =====
@@ -270,7 +305,7 @@ LOCAL_SEARCH_SETTINGS = {
     )
     or 10,
     "top_entities": _get_env_int("LOCAL_SEARCH_TOP_ENTITIES", 10) or 10,
-    "index_name": os.getenv("LOCAL_SEARCH_INDEX_NAME", "vector"),
+    "index_name": os.getenv("LOCAL_SEARCH_INDEX_NAME") or CHUNK_VECTOR_INDEX,
 }
 
 GLOBAL_SEARCH_SETTINGS = {

@@ -6,7 +6,10 @@ from docx import Document
 import csv
 import json
 import yaml
-from yaml import CLoader as Loader
+try:
+    from yaml import CLoader as Loader
+except ImportError:
+    from yaml import Loader
 
 from graphrag_agent.config.settings import FILES_DIR
 

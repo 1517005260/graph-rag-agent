@@ -1,6 +1,6 @@
 import re
 import concurrent.futures
-from typing import List, Set
+from typing import List, Set, Union, Dict, Any
 from langchain_community.graphs import Neo4jGraph
 from langchain_core.documents import Document
 from langchain_community.graphs.graph_document import GraphDocument, Node, Relationship
@@ -33,30 +33,46 @@ class GraphWriter:
         # 用于跟踪已经处理的节点，减少重复操作
         self.processed_nodes: Set[str] = set()
         
-    def convert_to_graph_document(self, chunk_id: str, input_text: str, result: str) -> GraphDocument:
+    def convert_to_graph_document(self, chunk_id: str, input_text: str, result: Union[str, Dict[str, Any]]) -> GraphDocument:
         """
-        将提取的实体关系文本转换为GraphDocument对象
-        
+        将提取的实体关系转换为GraphDocument对象
+
         Args:
             chunk_id: 文本块ID
             input_text: 输入文本
-            result: 提取结果
-            
+            result: 提取结果（支持 dict 或旧格式的 str）
+
         Returns:
             GraphDocument: 转换后的图文档对象
         """
-        node_pattern = re.compile(r'\("entity" : "(.+?)" : "(.+?)" : "(.+?)"\)')
-        relationship_pattern = re.compile(r'\("relationship" : "(.+?)" : "(.+?)" : "(.+?)" : "(.+?)" : (.+?)\)')
-
         nodes = {}
         relationships = []
 
-        # 使用高效的正则匹配处理
-        try:
-            # 解析节点 - 使用缓存提高效率
-            for match in node_pattern.findall(result):
-                node_id, node_type, description = match
-                # 检查节点缓存
+        # 判断输入格式：dict 或 str
+        if isinstance(result, dict):
+            # 新格式：直接从 dict 提取
+            entities = result.get("entities", [])
+            if not isinstance(entities, list):
+                entities = []
+
+            relations = result.get("relations", [])
+            # 兼容 relationships 字段
+            if not relations or not isinstance(relations, list):
+                relations = result.get("relationships", [])
+            if not isinstance(relations, list):
+                relations = []
+
+            # 处理实体
+            for e in entities:
+                if not isinstance(e, dict):
+                    continue
+                node_id = e.get("name", "")
+                node_type = e.get("type", "未知")
+                description = e.get("description", node_id)
+
+                if not node_id:
+                    continue
+
                 if node_id in self.node_cache:
                     nodes[node_id] = self.node_cache[node_id]
                 elif node_id not in nodes:
@@ -68,10 +84,20 @@ class GraphWriter:
                     nodes[node_id] = new_node
                     self.node_cache[node_id] = new_node
 
-            # 解析关系
-            for match in relationship_pattern.findall(result):
-                source_id, target_id, rel_type, description, weight = match
-                # 确保源节点存在，先检查缓存
+            # 处理关系
+            for r in relations:
+                if not isinstance(r, dict):
+                    continue
+                source_id = r.get("source", "")
+                target_id = r.get("target", "")
+                rel_type = r.get("type", "RELATED_TO")
+                description = r.get("description", f"{source_id} {rel_type} {target_id}")
+                weight = r.get("strength", 8)
+
+                if not source_id or not target_id:
+                    continue
+
+                # 确保源节点存在
                 if source_id not in nodes:
                     if source_id in self.node_cache:
                         nodes[source_id] = self.node_cache[source_id]
@@ -83,8 +109,8 @@ class GraphWriter:
                         )
                         nodes[source_id] = new_node
                         self.node_cache[source_id] = new_node
-                        
-                # 确保目标节点存在，先检查缓存
+
+                # 确保目标节点存在
                 if target_id not in nodes:
                     if target_id in self.node_cache:
                         nodes[target_id] = self.node_cache[target_id]
@@ -96,29 +122,89 @@ class GraphWriter:
                         )
                         nodes[target_id] = new_node
                         self.node_cache[target_id] = new_node
-                    
+
                 relationships.append(
                     Relationship(
                         source=nodes[source_id],
                         target=nodes[target_id],
                         type=rel_type,
-                        properties={
-                            "description": description,
-                            "weight": float(weight)
-                        }
+                        properties={'description': description, 'weight': weight}
                     )
                 )
-        except Exception as e:
-            print(f"解析文本时出错: {e}")
-            # 返回空的GraphDocument而不是引发异常
-            return GraphDocument(
-                nodes=[],
-                relationships=[],
-                source=Document(
-                    page_content=input_text,
-                    metadata={"chunk_id": chunk_id, "error": str(e)}
+
+        else:
+            # 旧格式：使用正则表达式解析字符串
+            node_pattern = re.compile(r'\("entity" : "(.+?)" : "(.+?)" : "(.+?)"\)')
+            relationship_pattern = re.compile(r'\("relationship" : "(.+?)" : "(.+?)" : "(.+?)" : "(.+?)" : (.+?)\)')
+
+            # 使用高效的正则匹配处理
+            try:
+                # 解析节点 - 使用缓存提高效率
+                for match in node_pattern.findall(result):
+                    node_id, node_type, description = match
+                    # 检查节点缓存
+                    if node_id in self.node_cache:
+                        nodes[node_id] = self.node_cache[node_id]
+                    elif node_id not in nodes:
+                        new_node = Node(
+                            id=node_id,
+                            type=node_type,
+                            properties={'description': description}
+                        )
+                        nodes[node_id] = new_node
+                        self.node_cache[node_id] = new_node
+
+                # 解析关系
+                for match in relationship_pattern.findall(result):
+                    source_id, target_id, rel_type, description, weight = match
+                    # 确保源节点存在，先检查缓存
+                    if source_id not in nodes:
+                        if source_id in self.node_cache:
+                            nodes[source_id] = self.node_cache[source_id]
+                        else:
+                            new_node = Node(
+                                id=source_id,
+                                type="未知",
+                                properties={'description': 'No additional data'}
+                            )
+                            nodes[source_id] = new_node
+                            self.node_cache[source_id] = new_node
+
+                    # 确保目标节点存在，先检查缓存
+                    if target_id not in nodes:
+                        if target_id in self.node_cache:
+                            nodes[target_id] = self.node_cache[target_id]
+                        else:
+                            new_node = Node(
+                                id=target_id,
+                                type="未知",
+                                properties={'description': 'No additional data'}
+                            )
+                            nodes[target_id] = new_node
+                            self.node_cache[target_id] = new_node
+
+                    relationships.append(
+                        Relationship(
+                            source=nodes[source_id],
+                            target=nodes[target_id],
+                            type=rel_type,
+                            properties={
+                                "description": description,
+                                "weight": float(weight)
+                            }
+                        )
+                    )
+            except Exception as e:
+                print(f"解析文本时出错: {e}")
+                # 返回空的GraphDocument而不是引发异常
+                return GraphDocument(
+                    nodes=[],
+                    relationships=[],
+                    source=Document(
+                        page_content=input_text,
+                        metadata={"chunk_id": chunk_id, "error": str(e)}
+                    )
                 )
-            )
 
         # 创建并返回GraphDocument对象
         return GraphDocument(

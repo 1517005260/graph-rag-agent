@@ -1,0 +1,132 @@
+{
+  "project_name": "东理工大学学生管理",
+  "version": "1.0",
+  "description": "适用于信访、法律咨询、案件管理等场景",
+  "industry": "法务",
+  "bridge_definitions": [
+    {
+      "name": "问题类型",
+      "key": "bridge_issue_type",
+      "description": "案件或信访的核心问题分类",
+      "examples": [
+        "劳动纠纷",
+        "房产纠纷",
+        "环境问题",
+        "民事纠纷"
+      ],
+      "is_enum_restricted": false,
+      "enum_values": null
+    },
+    {
+      "name": "风险等级",
+      "key": "bridge_risk_level",
+      "description": "案件的风险或优先级",
+      "examples": [
+        "高风险",
+        "中风险",
+        "低风险",
+        "一般"
+      ],
+      "is_enum_restricted": true,
+      "enum_values": [
+        "高风险",
+        "中风险",
+        "低风险",
+        "一般"
+      ]
+    }
+  ],
+  "domain_definitions": [
+    {
+      "domain_name": "法规库",
+      "description": "法律法规、政策文件、规章制度",
+      "trigger_condition": "文档包含法律条款、政策规定、规章制度",
+      "schema": {
+        "entities": [
+          "法条",
+          "政策",
+          "条款",
+          "部门",
+          "机构"
+        ],
+        "relations": [
+          "规定",
+          "依据",
+          "负责",
+          "管辖",
+          "约束"
+        ]
+      },
+      "bridge_mappings": [
+        {
+          "bridge_key": "bridge_issue_type",
+          "role": "适用场景",
+          "field_name": null
+        }
+      ]
+    },
+    {
+      "domain_name": "案件库",
+      "description": "历史案件、信访记录、诉讼档案",
+      "trigger_condition": "文档包含案件描述、当事人、时间地点等要素",
+      "schema": {
+        "entities": [
+          "当事人",
+          "案件",
+          "行为",
+          "地点",
+          "时间",
+          "证据"
+        ],
+        "relations": [
+          "投诉",
+          "涉及",
+          "发生于",
+          "导致",
+          "解决"
+        ]
+      },
+      "bridge_mappings": [
+        {
+          "bridge_key": "bridge_issue_type",
+          "role": "案由",
+          "field_name": null
+        },
+        {
+          "bridge_key": "bridge_risk_level",
+          "role": "紧急程度",
+          "field_name": null
+        }
+      ]
+    },
+    {
+      "domain_name": "经验库",
+      "description": "处理经验、调解方案、判例分析",
+      "trigger_condition": "文档包含总结、经验、建议、方案",
+      "schema": {
+        "entities": [
+          "处理方案",
+          "调解方法",
+          "建议",
+          "经验"
+        ],
+        "relations": [
+          "适用于",
+          "解决",
+          "参考",
+          "借鉴"
+        ]
+      },
+      "bridge_mappings": [
+        {
+          "bridge_key": "bridge_issue_type",
+          "role": "适用问题",
+          "field_name": null
+        }
+      ]
+    }
+  ],
+  "created_at": "2025-12-09T11:43:21.071238",
+  "updated_at": "2025-12-15T22:24:31.646040",
+  "created_by": null
+}

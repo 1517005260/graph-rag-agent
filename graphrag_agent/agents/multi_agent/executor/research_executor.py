@@ -28,6 +28,7 @@ from graphrag_agent.agents.multi_agent.executor.base_executor import (
     ExecutorConfig,
     TaskExecutionResult,
 )
+from graphrag_agent.utils.tool_invocation import invoke_tool_structured
 from graphrag_agent.agents.multi_agent.tools.evidence_tracker import get_evidence_tracker
 from graphrag_agent.search.tool_registry import TOOL_REGISTRY
 
@@ -66,7 +67,7 @@ class ResearchExecutor(BaseExecutor):
         result_payload: Any = None
 
         try:
-            result_payload = tool.search(payload)
+            result_payload = invoke_tool_structured(tool, payload)
         except Exception as exc:  # noqa: BLE001
             success = False
             error_message = str(exc)
@@ -250,21 +251,56 @@ class ResearchExecutor(BaseExecutor):
 
     @staticmethod
     def _extract_reference_ids(result_payload: Any, answer_text: str) -> List[str]:
+        """
+        从结果中提取引用ID，优先使用结构化数据，正则表达式仅作为最后兜底。
+
+        策略优先级：
+        1. 从 result_payload 的 "references" 字段直接获取（最稳健）
+        2. 从 result_payload 的 "reference" 结构中解析
+        3. 【兜底】使用简单正则表达式从文本中提取
+
+        Args:
+            result_payload: Tool 返回的结构化数据或文本
+            answer_text: 提取出的答案文本
+
+        Returns:
+            去重后的引用ID列表
+        """
         references: List[str] = []
 
         def _push(candidate: Optional[str]) -> None:
+            """辅助函数：添加候选ID到引用列表"""
             if not candidate:
                 return
-            candidate = candidate.strip().strip("'\"")
+            candidate = str(candidate).strip().strip("'\"")
             if not candidate:
                 return
             if candidate not in references:
                 references.append(candidate)
 
+        # ========== 策略 1：优先从结构化 "references" 字段获取 ==========
         if isinstance(result_payload, dict):
-            reference_payload = result_payload.get("reference") or result_payload.get("references")
+            # 最标准的格式：{"content": "...", "references": ["id1", "id2"]}
+            direct_refs = result_payload.get("references")
+            if isinstance(direct_refs, list) and direct_refs:
+                for ref in direct_refs:
+                    if isinstance(ref, dict):
+                        # 支持 {"id": "xxx", "doc_id": "xxx", ...} 格式
+                        _push(ref.get("id") or ref.get("doc_id") or ref.get("chunk_id"))
+                    else:
+                        # 直接是字符串 ID
+                        _push(ref)
+                # 如果成功从 references 字段获取，直接返回（最稳健）
+                if references:
+                    _LOGGER.debug("从结构化 'references' 字段提取到 %d 个引用", len(references))
+                    return list(set(references))  # 去重
+
+        # ========== 策略 2：从 "reference" 结构中解析（兼容旧格式）==========
+        if isinstance(result_payload, dict):
+            reference_payload = result_payload.get("reference")
             if isinstance(reference_payload, dict):
-                for key in ("doc_aggs", "chunks", "Chunks"):
+                # 遍历常见的引用字段名
+                for key in ("doc_aggs", "chunks", "Chunks", "documents", "sources"):
                     values = reference_payload.get(key)
                     if isinstance(values, list):
                         for item in values:
@@ -273,24 +309,31 @@ class ResearchExecutor(BaseExecutor):
                             else:
                                 _push(str(item))
             elif isinstance(reference_payload, list):
+                # reference 直接是列表
                 for item in reference_payload:
                     if isinstance(item, dict):
                         _push(item.get("doc_id") or item.get("chunk_id") or item.get("id"))
                     else:
                         _push(str(item))
 
-        # 从答案文本中解析 {"Chunks": [...]} 结构或证据ID标签
-        if answer_text:
-            chunk_matches = re.findall(r"Chunks'\s*:\s*\[([^\]]+)\]", answer_text)
-            for block in chunk_matches:
-                for part in block.split(","):
-                    _push(part)
+        # 如果已经从结构化数据中提取到引用，直接返回
+        if references:
+            _LOGGER.debug("从 'reference' 结构提取到 %d 个引用", len(references))
+            return list(set(references))  # 去重
 
-            id_matches = re.findall(r"\[证据ID[:：]\s*([A-Za-z0-9\-]+)\]", answer_text)
+        # ========== 策略 3：【兜底】仅在结构化数据为空时使用简单正则 ==========
+        if answer_text and not references:
+            _LOGGER.warning(
+                "结构化引用提取失败，回退到正则表达式解析（不稳定）。"
+                "建议修改 Tool 返回格式为: {\"content\": \"...\", \"references\": [...]}"
+            )
+
+            # 最基础的正则：仅提取形如 [证据ID: xxx] 的标签
+            id_matches = re.findall(r"\[证据ID[:：]\s*([A-Za-z0-9\-_]+)\]", answer_text)
             for eid in id_matches:
                 _push(eid)
 
-        return references
+        return list(set(references))  # 最终去重
 
     def _resolve_reference_evidence(
         self,

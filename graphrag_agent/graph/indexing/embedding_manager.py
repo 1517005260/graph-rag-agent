@@ -116,13 +116,14 @@ class EmbeddingManager:
         result = self.graph.query(query, params={"limit": limit})
         return result if result else []
     
-    def update_entity_embeddings(self, entity_ids: Optional[List[str]] = None) -> int:
+    def update_entity_embeddings(self, entity_ids: Optional[List[str]] = None, limit: int = 1000) -> int:
         """
         更新实体Embedding
-        
+
         Args:
             entity_ids: 要更新的实体ID列表，如果为None则自动检测
-            
+            limit: 自动检测时的最大实体数量
+
         Returns:
             int: 更新的实体数量
         """
@@ -142,7 +143,7 @@ class EmbeddingManager:
             entities = self.graph.query(query)
         else:
             # 自动检测需要更新的实体
-            entities = self.get_entities_needing_update(limit=self.batch_size * 5)
+            entities = self.get_entities_needing_update(limit=limit)
         
         if not entities:
             self.console.print("[yellow]没有需要更新Embedding的实体[/yellow]")
@@ -213,13 +214,14 @@ class EmbeddingManager:
         
         return updated_count
     
-    def update_chunk_embeddings(self, chunk_ids: Optional[List[str]] = None) -> int:
+    def update_chunk_embeddings(self, chunk_ids: Optional[List[str]] = None, limit: int = 1000) -> int:
         """
         更新Chunk Embedding
-        
+
         Args:
             chunk_ids: 要更新的Chunk ID列表，如果为None则自动检测
-            
+            limit: 自动检测时的最大Chunk数量
+
         Returns:
             int: 更新的Chunk数量
         """
@@ -239,7 +241,7 @@ class EmbeddingManager:
             chunks = self.graph.query(query)
         else:
             # 自动检测需要更新的Chunk
-            chunks = self.get_chunks_needing_update(limit=self.batch_size * 5)
+            chunks = self.get_chunks_needing_update(limit=limit)
         
         if not chunks:
             self.console.print("[yellow]没有需要更新Embedding的Chunk[/yellow]")
