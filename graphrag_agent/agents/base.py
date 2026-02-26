@@ -112,6 +112,25 @@ class BaseAgent(ABC):
         # 编译图
         self.graph = workflow.compile(checkpointer=self.memory)
     
+    @staticmethod
+    def _find_last_human_message(messages):
+        """
+        从 messages 列表中查找最后一条 HumanMessage。
+        
+        使用类型匹配代替硬编码索引 messages[-3]，
+        避免在多工具调用或多轮对话场景下取到错误内容。
+        
+        参数:
+            messages: 消息列表
+            
+        返回:
+            HumanMessage 或 None
+        """
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage):
+                return msg
+        return None
+    
     async def _stream_process(self, inputs: Dict[str, Any], config: Dict[str, Any]) -> AsyncGenerator[str, None]:
         """
         执行流式处理的默认实现

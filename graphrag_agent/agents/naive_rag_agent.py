@@ -53,10 +53,8 @@ class NaiveRagAgent(BaseAgent):
         messages = state["messages"]
         
         # 安全地获取问题和检索结果
-        try:
-            question = messages[-3].content if len(messages) >= 3 else "未找到问题"
-        except Exception:
-            question = "无法获取问题"
+        human_msg = self._find_last_human_message(messages)
+        question = human_msg.content if human_msg else "未找到问题"
             
         try:
             docs = messages[-1].content if messages[-1] else "未找到相关信息"

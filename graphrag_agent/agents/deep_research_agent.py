@@ -128,9 +128,9 @@ class DeepResearchAgent(BaseAgent):
         messages = state["messages"]
         
         # 安全地获取问题和检索结果
+        human_msg = self._find_last_human_message(messages)
+        question = human_msg.content if human_msg else "未找到问题"
         try:
-            # 原始问题在倒数第三个消息
-            question = messages[-3].content if len(messages) >= 3 else "未找到问题"
             # 检索结果在最后一个消息
             retrieval_result = messages[-1].content if messages[-1] else "未找到相关信息"
         except Exception as e:

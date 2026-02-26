@@ -74,10 +74,8 @@ class HybridAgent(BaseAgent):
         messages = state["messages"]
         
         # 安全地获取问题内容
-        try:
-            question = messages[-3].content if len(messages) >= 3 else "未找到问题"
-        except Exception:
-            question = "无法获取问题"
+        human_msg = self._find_last_human_message(messages)
+        question = human_msg.content if human_msg else "未找到问题"
             
         # 安全地获取文档内容
         try:
@@ -143,10 +141,8 @@ class HybridAgent(BaseAgent):
         messages = state["messages"]
         
         # 安全地获取问题内容
-        try:
-            question = messages[-3].content if len(messages) >= 3 else "未找到问题"
-        except Exception:
-            question = "无法获取问题"
+        human_msg = self._find_last_human_message(messages)
+        question = human_msg.content if human_msg else "未找到问题"
             
         # 安全地获取文档内容
         try:
