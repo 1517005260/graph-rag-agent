@@ -6,7 +6,8 @@ services:
       - "7474:7474"
       - "7687:7687"
     environment:
-      NEO4J_AUTH: "neo4j/12345678"
+      # 生产环境请务必通过环境变量注入强密码，避免弱口令。
+      NEO4J_AUTH: "${NEO4J_AUTH:-neo4j/CHANGE_THIS_STRONG_PASSWORD}"
       NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
       NEO4J_dbms_security_procedures_unrestricted: "apoc.*,gds.*"
       NEO4J_dbms_memory_heap_initial__size: "2G"

@@ -736,3 +736,19 @@ python search_with_stream.py
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=1517005260/graph-rag-agent&type=Date)](https://www.star-history.com/#1517005260/graph-rag-agent&Date)
+
+## Baseline Maintenance
+
+### Environment
+
+- Put runtime credentials in environment variables.
+- Use `.env.example` as the configuration template.
+
+### CI
+
+- `baseline-ci.yml` provides a unified pipeline with `lint + build + test + secret scan`.
+
+### Repo Hygiene
+
+- Keep generated files (`dist/`, `build/`, `__pycache__/`, `.idea/`, `.DS_Store`) out of version control.
+
