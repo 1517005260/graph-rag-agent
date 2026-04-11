@@ -752,3 +752,13 @@ python search_with_stream.py
 
 - Keep generated files (`dist/`, `build/`, `__pycache__/`, `.idea/`, `.DS_Store`) out of version control.
 
+
+## Contributor Quick Verification
+<!-- codex-batch30-readme -->
+
+Before opening a PR, run these quick checks locally:
+
+- Build: `python -m pip install -r requirements.txt`
+- Tests: `pytest -q`
+- Keep changes focused: one topic per PR with a clear title
+
