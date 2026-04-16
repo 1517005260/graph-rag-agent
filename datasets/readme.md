@@ -26,3 +26,14 @@ wget http://curtis.ml.cmu.edu/datasets/hotpot/hotpot_dev_distractor_v1.json
    - `--report-type`: Reporter 输出类型，可选 `short_answer` 或 `long_document`。
    - `--llm-eval`: 启用 LLM 判定答案正确性。
    - `--predictions`: 保存预测与指标的输出文件路径。
+
+## Environment Requirements
+
+- Configure credentials via environment variables before startup.
+- Refer to `.env.example` for the minimum required keys.
+
+## Quick Start
+
+- Install project dependencies according to this module.
+- Run the module with your standard build command (for example `mvn test`, `npm run dev`, or equivalent script in this repo).
+
