@@ -31,6 +31,17 @@ frontend/
     └── state.py                    # 会话状态管理
 ```
 
+## Demo 入口导航
+
+| 目标 | 入口 | 说明 |
+|---|---|---|
+| 启动前端演示 | `streamlit run frontend/app.py` | 进入交互式问答与图谱可视化界面 |
+| 启动后端 API | `uvicorn server.main:app --reload --port 8000` | 为前端提供聊天、图谱和反馈接口 |
+| 查看流式终端输出 | `python test/search_with_stream.py` | 不经过网页，直接验证流式 Agent 输出 |
+| 查看非流式问答结果 | `python test/search_without_stream.py` | 快速比较不同 Agent 的最终回答 |
+
+建议先启动后端，再打开前端；如果前端页面无法加载回答，优先检查 `FRONTEND_API_URL` 或本地 API 地址是否与后端端口一致。
+
 ## 核心实现思路
 
 ### 1. 多模式的用户界面
