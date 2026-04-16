@@ -39,6 +39,20 @@ cd graph-rag-agent/
 docker compose up -d
 ```
 
+### 推荐的本地启动顺序
+
+1. 先准备模型服务：确认 One-API / new-api 或其他 OpenAI 兼容网关已经可用。
+2. 再启动 Neo4j：执行 `docker compose up -d`，并等待 `neo4j://localhost:7687` 可连接。
+3. 然后安装 Python 依赖并配置 `.env`。
+4. 首次构图完成后，再启动 `server/main.py` 和 `frontend/app.py` 做联调。
+
+### Neo4j 本地检查清单
+
+- `docker ps` 中能看到 Neo4j 容器正在运行。
+- `NEO4J_URI`、`NEO4J_USERNAME`、`NEO4J_PASSWORD` 与本地实例一致。
+- 如果修改了默认密码，请同步更新 `.env`，否则启动时会出现认证失败。
+- 首次构图前确认本地磁盘空间充足，避免索引或社区构建过程中中断。
+
 默认账号密码：
 
 ```
