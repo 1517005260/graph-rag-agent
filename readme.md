@@ -121,6 +121,16 @@ graph-rag-agent/
 
 请参考：[快速开始文档](./assets/start.md)
 
+### 快速入口矩阵
+
+| 目标 | 入口脚本 / 模块 | 适用场景 | 前置条件 |
+|---|---|---|---|
+| 构建知识图谱 | `graphrag_agent/integrations/build/main.py` | 首次导入文档并生成图谱、索引和社区 | `.env` 配置完成，Neo4j 已启动 |
+| 启动后端 API | `server/main.py` | 为前端或外部客户端提供问答与图谱接口 | Neo4j 已启动，模型配置可用 |
+| 启动前端界面 | `frontend/app.py` | 本地调试问答、图谱和执行轨迹 | 后端 API 可访问 |
+| 运行终端问答测试 | `test/search_with_stream.py` / `test/search_without_stream.py` | 验证各 Agent 的输出质量与流式行为 | 已完成图谱构建，测试查询可命中数据 |
+| 批量评测多智能体效果 | `test/hotpot_multi_agent_eval.py` | HotpotQA 等数据集上的离线评测 | 已下载数据集，`.env` 中模型凭据有效 |
+
 ## 🧰 功能模块
 
 ### 图谱构建与管理
@@ -751,4 +761,3 @@ python search_with_stream.py
 ### Repo Hygiene
 
 - Keep generated files (`dist/`, `build/`, `__pycache__/`, `.idea/`, `.DS_Store`) out of version control.
-
