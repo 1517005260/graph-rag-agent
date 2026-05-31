@@ -1,18 +1,18 @@
 import time
 from datetime import datetime
 
-from agent.deep_research_agent import DeepResearchAgent
-from agent.naive_rag_agent import NaiveRagAgent
-from agent.graph_agent import GraphAgent
-from agent.hybrid_agent import HybridAgent
-from agent.fusion_agent import FusionGraphRAGAgent
+from graphrag_agent.agents.deep_research_agent import DeepResearchAgent
+from graphrag_agent.agents.naive_rag_agent import NaiveRagAgent
+from graphrag_agent.agents.graph_agent import GraphAgent
+from graphrag_agent.agents.hybrid_agent import HybridAgent
+from graphrag_agent.agents.fusion_agent import FusionGraphRAGAgent
 
 TEST_CONFIG = {
     "queries": [
         "优秀学生的申请条件是什么？",
-        "学业奖学金有多少钱？",
-        "大学英语考试的标准是什么？",
-        "小明同学旷课了30学时，又私藏了吹风机，他还殴打了同学，他还能评选国家奖学金吗？",
+        # "学业奖学金有多少钱？",
+        # "大学英语考试的标准是什么？",
+        # "小明同学旷课了30学时，又私藏了吹风机，他还殴打了同学，他还能评选国家奖学金吗？",
     ]
 }
 

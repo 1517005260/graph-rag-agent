@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from config.settings import community_algorithm
+from graphrag_agent.config.settings import community_algorithm
 
 
 class ChatRequest(BaseModel):
