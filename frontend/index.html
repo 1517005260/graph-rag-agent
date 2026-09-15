@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>五图上传</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #f5f6fa;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 40px 16px;
+  }
+  .container {
+    width: 100%;
+    max-width: 720px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.08);
+    padding: 32px;
+  }
+  h1 { font-size: 20px; margin-bottom: 8px; }
+  .tip { color: #888; font-size: 13px; margin-bottom: 24px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .upload-item { position: relative; }
+  .upload-item label { display: block; font-size: 13px; color: #555; margin-bottom: 6px; }
+  .preview-box {
+    width: 100%;
+    aspect-ratio: 1;
+    border: 2px dashed #ccc;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: #fafafa;
+    cursor: pointer;
+    transition: border-color .2s;
+  }
+  .preview-box:hover { border-color: #4a7dff; }
+  .preview-box img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: none;
+  }
+  .preview-box .placeholder { color: #aaa; font-size: 13px; text-align: center; }
+  .preview-box.has-image { border-style: solid; border-color: #4a7dff; }
+  .preview-box.has-image .placeholder { display: none; }
+  .preview-box.has-image img { display: block; }
+  .clear-btn {
+    position: absolute;
+    top: 24px;
+    right: 4px;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0,0,0,.55);
+    color: #fff;
+    font-size: 14px;
+    line-height: 22px;
+    cursor: pointer;
+    display: none;
+  }
+  .upload-item.has-image .clear-btn { display: block; }
+  input[type="file"] { display: none; }
+  .submit-btn {
+    width: 100%;
+    padding: 12px;
+    border: none;
+    border-radius: 8px;
+    background: #4a7dff;
+    color: #fff;
+    font-size: 16px;
+    cursor: pointer;
+    transition: background .2s;
+  }
+  .submit-btn:hover:not(:disabled) { background: #3568e8; }
+  .submit-btn:disabled { background: #aab8e0; cursor: not-allowed; }
+  .status {
+    margin-top: 16px;
+    padding: 12px;
+    border-radius: 8px;
+    font-size: 14px;
+    display: none;
+  }
+  .status.show { display: block; }
+  .status.success { background: #e8f7ee; color: #1c7c3f; }
+  .status.error { background: #fdeaea; color: #c0392b; }
+  .status.loading { background: #eef2ff; color: #4a7dff; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>上传 5 张图片</h1>
+  <p class="tip">点击虚线框选择图片，支持 JPG / PNG / GIF / WebP</p>
+
+  <form id="uploadForm">
+    <div class="grid" id="grid"></div>
+    <button type="submit" class="submit-btn" id="submitBtn">提交上传</button>
+  </form>
+
+  <div class="status" id="status"></div>
+</div>
+
+<script>
+  const UPLOAD_URL = '/api/upload'; // TODO: 改成你的后端接口地址
+  const MAX_FILES = 5;
+  const grid = document.getElementById('grid');
+  const form = document.getElementById('uploadForm');
+  const submitBtn = document.getElementById('submitBtn');
+  const statusEl = document.getElementById('status');
+
+  // 动态生成 5 个上传项
+  for (let i = 0; i < MAX_FILES; i++) {
+    const item = document.createElement('div');
+    item.className = 'upload-item';
+    item.innerHTML = `
+      <label>图片 ${i + 1}</label>
+      <div class="preview-box" data-index="${i}">
+        <span class="placeholder">点击选择</span>
+        <img alt="预览">
+      </div>
+      <button type="button" class="clear-btn" data-index="${i}" title="移除">×</button>
+      <input type="file" id="file${i}" accept="image/*">
+    `;
+    grid.appendChild(item);
+  }
+
+  function showStatus(msg, type) {
+    statusEl.textContent = msg;
+    statusEl.className = 'status show ' + type;
+  }
+
+  // 点击预览框触发文件选择
+  grid.querySelectorAll('.preview-box').forEach(box => {
+    box.addEventListener('click', () => {
+      document.getElementById('file' + box.dataset.index).click();
+    });
+  });
+
+  // 选择文件后显示预览
+  grid.querySelectorAll('input[type="file"]').forEach(input => {
+    input.addEventListener('change', () => {
+      const idx = input.id.replace('file', '');
+      const item = input.closest('.upload-item');
+      const box = item.querySelector('.preview-box');
+      const img = box.querySelector('img');
+      const file = input.files[0];
+
+      if (!file) {
+        box.classList.remove('has-image');
+        item.classList.remove('has-image');
+        img.src = '';
+        return;
+      }
+      if (!file.type.startsWith('image/')) {
+        showStatus('只能选择图片文件', 'error');
+        input.value = '';
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = e => {
+        img.src = e.target.result;
+        box.classList.add('has-image');
+        item.classList.add('has-image');
+      };
+      reader.readAsDataURL(file);
+      statusEl.classList.remove('show');
+    });
+  });
+
+  // 移除已选图片
+  grid.querySelectorAll('.clear-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const idx = btn.dataset.index;
+      const input = document.getElementById('file' + idx);
+      const item = btn.closest('.upload-item');
+      input.value = '';
+      item.querySelector('.preview-box').classList.remove('has-image');
+      item.classList.remove('has-image');
+      item.querySelector('img').src = '';
+    });
+  });
+
+  // 提交：用 FormData POST 五张图片
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+
+    const files = [];
+    for (let i = 0; i < MAX_FILES; i++) {
+      const f = document.getElementById('file' + i).files[0];
+      if (f) files.push(f);
+    }
+    if (files.length === 0) {
+      showStatus('请至少选择一张图片', 'error');
+      return;
+    }
+
+    const formData = new FormData();
+    files.forEach(file => formData.append('images', file));
+    formData.append('count', files.length);
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = '上传中…';
+    showStatus(`正在上传 ${files.length} 张图片…`, 'loading');
+
+    try {
+      const res = await fetch(UPLOAD_URL, { method: 'POST', body: formData });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json().catch(() => ({}));
+      showStatus('上传成功！服务器响应：' + JSON.stringify(data), 'success');
+    } catch (err) {
+      showStatus('上传失败：' + err.message + '（请确认 UPLOAD_URL 指向可访问的后端接口）', 'error');
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = '提交上传';
+    }
+  });
+</script>
+</body>
+</html>
